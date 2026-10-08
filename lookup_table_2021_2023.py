@@ -11,7 +11,6 @@ lookup_output_path = base_path / 'risk_lookup_table_absorbed_2021_2023.csv'
 print('📂 마스터 파일 로드 중...')
 df_master = pd.read_csv(master_path, encoding='utf-8-sig')
 
-
 # 2. 발주기관 그룹 매핑 함수 (공군 계열 분리 포함)
 def map_org_group(val):
   val_str = str(val)
