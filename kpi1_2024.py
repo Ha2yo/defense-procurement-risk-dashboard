@@ -45,6 +45,7 @@ def map_org_group(val):
 df_master['org_group'] = df_master['ornt'].apply(map_org_group)
 df_master['mthd_group'] = df_master['cntrctMth']
 
+
 # 3. 2024년 검증 데이터 전처리 (수의계약 제외, 결과확정 경쟁성 공고 대상)
 print("🧹 2024년 검증 데이터 전처리 중 (수의계약 제외)...")
 df_2024 = df_master[
