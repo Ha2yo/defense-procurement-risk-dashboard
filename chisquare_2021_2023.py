@@ -19,7 +19,6 @@ df_lookup = pd.read_csv(lookup_path, encoding='utf-8-sig')
 df_lookup['fail_count'] = (df_lookup['sample_count'] * df_lookup['fail_rate']).round().astype(int)
 df_lookup['success_count'] = df_lookup['sample_count'] - df_lookup['fail_count']
 
-
 # ==============================================================================
 # 카이제곱 독립성 검정 수행 함수
 # ==============================================================================
