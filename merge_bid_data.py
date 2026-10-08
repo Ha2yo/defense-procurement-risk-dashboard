@@ -1,5 +1,4 @@
 # %%
-# 입찰공고, 결과 병합
 from pathlib import Path
 import pandas as pd
 
