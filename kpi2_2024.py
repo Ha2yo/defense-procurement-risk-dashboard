@@ -43,7 +43,6 @@ def map_org_group(val):
     else:
         return '기타계열'
 
-
 df_master['org_group'] = df_master['ornt'].apply(map_org_group)
 df_master['mthd_group'] = df_master['cntrctMth']
 
