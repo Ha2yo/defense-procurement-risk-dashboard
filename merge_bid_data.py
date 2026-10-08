@@ -2,6 +2,7 @@
 from pathlib import Path
 import pandas as pd
 
+
 # 1. 현재 실행 환경에 따른 기준 경로 설정
 try:
     BASE_DIR = Path(__file__).resolve().parent
