@@ -1,126 +1,86 @@
-from pathlib import Path
+# %%
+"""2021~2023년 유찰 위험도 룩업 테이블 생성 (수의계약 제외, 소표본 흡수)."""
 import pandas as pd
 
-# 1. 파일 경로 설정 (지정하신 data-kpi 폴더 기준)
-base_path = Path(r'C:\repository\defense-procurement-risk-dashboard\data-kpi')
-base_path.mkdir(parents=True, exist_ok=True)
+from kpi_common import (
+    DATA_KPI_DIR, LOOKUP_PATH, KEYS, MIN_SAMPLE, load_master, get_train,
+)
 
-master_path = base_path / 'bid_master_2021_2025.csv'
-lookup_output_path = base_path / 'risk_lookup_table_absorbed_2021_2023.csv'
+DATA_KPI_DIR.mkdir(parents=True, exist_ok=True)
 
-print('📂 마스터 파일 로드 중...')
-df_master = pd.read_csv(master_path, encoding='utf-8-sig')
+print('📂 마스터 파일 로드 중 (수의계약 제외)...')
+df_train = get_train(load_master())
+print(f'🔍 2021~2023년 학습 데이터: {len(df_train):,}건')
 
-
-# 2. 발주기관 그룹 매핑 함수 (공군 계열 분리 포함)
-def map_org_group(val):
-  val_str = str(val)
-  if (
-      '육군' in val_str
-      or '3군단' in val_str
-      or '군단' in val_str
-      or '사령부' in val_str
-  ):
-    return '1. 육군계열'
-  elif '공군' in val_str:
-    return '2. 공군계열'
-  elif '해군' in val_str or '해병대' in val_str:
-    return '3. 해군/해병대계열'
-  elif (
-      '국방부' in val_str
-      or '합동' in val_str
-      or '근무지원단' in val_str
-  ):
-    return '4. 국방부직할/합동'
-  else:
-    return '기타계열'
-
-
-df_master['org_group'] = df_master['ornt'].apply(map_org_group)
-df_master['mthd_group'] = df_master['cntrctMth']
-
-# 3. '수의' 관련 계약 방식 완벽 제외 전처리
-print("🧹 '수의계약' 관련 데이터를 분석 대상에서 완벽히 제외하는 중...")
-df_filtered = df_master[
-    ~df_master['cntrctMth'].astype(str).str.contains('수의', na=False)
-].copy()
-
-# 4. 2021~2023년 학습 데이터 추출 및 초기 조합 집계
-print('🔍 2021~2023년 학습 데이터 추출 및 조합 집계 중...')
-df_train = df_filtered[
-    (df_filtered['year'] >= 2021) & (df_filtered['year'] <= 2023)
-].copy()
-
+# 1. 조합별 집계
 df = (
-    df_train.groupby(['org_group', 'mthd_group', 'busiDivs'])
-    .agg(sample_count=('fail_yn', 'count'), fail_rate=('fail_yn', 'mean'))
+    df_train.groupby(KEYS)
+    .agg(own_count=('fail_yn', 'count'), fail_count=('fail_yn', 'sum'))
     .reset_index()
 )
 
-# 정밀 가중평균 계산을 위한 유찰 건수 복원
-df['fail_count'] = df['sample_count'] * df['fail_rate']
+# 2. 10건 이상(기준 조합) vs 10건 미만(소표본) 분리
+large_df = df[df['own_count'] >= MIN_SAMPLE].copy().reset_index(drop=True)
+small_df = df[df['own_count'] < MIN_SAMPLE].copy().reset_index(drop=True)
+large_df['sample_count'] = large_df['own_count']
 
-# 5. 데이터 분리: 10개 이상(기준 테이블) vs 10개 미만(소표본)
-large_df = df[df['sample_count'] >= 10].copy().reset_index(drop=True)
-small_df = df[df['sample_count'] < 10].copy().reset_index(drop=True)
+print(f'✨ 기준 조합 (10건 이상): {len(large_df):,}개')
+print(f'➕ 소표본 조합 (10건 미만): {len(small_df):,}개\n')
 
-print(f'✨ 기준 유지 데이터 (10건 이상): {len(large_df):,}개 행')
-print(f'➕ 흡수시킬 소표본 데이터 (10건 미만): {len(small_df):,}개 행\n')
 
-# 6. 소표본 행들을 우선순위에 따라 10개 이상 행들에 흡수시키기
-print('🔄 소표본 데이터 상위 그룹 흡수(Absorption) 작업 중...')
-for idx, row in small_df.iterrows():
-  org = row['org_group']
-  mthd = row['mthd_group']
-  busi = row['busiDivs']
-  s_cnt = row['sample_count']
-  f_cnt = row['fail_count']
-
-  matched = False
-
-  # [1순위] 기관 + 계약방식이 일치하는 10개 이상 행 찾기
-  cand1 = large_df[
-      (large_df['org_group'] == org) & (large_df['mthd_group'] == mthd)
-  ]
-  if not cand1.empty:
-    target_idx = cand1['sample_count'].idxmax()
-    large_df.loc[target_idx, 'sample_count'] += s_cnt
-    large_df.loc[target_idx, 'fail_count'] += f_cnt
-    matched = True
-  else:
-    # [2순위] 기관 + 사업유형이 일치하는 10개 이상 행 찾기
-    cand2 = large_df[
-        (large_df['org_group'] == org) & (large_df['busiDivs'] == busi)
+def find_target(row):
+    """소표본 조합을 흡수할 기준 조합의 인덱스를 찾는다. 없으면 None."""
+    same_org = large_df['org_group'] == row['org_group']
+    candidates = [
+        large_df[same_org & (large_df['mthd_group'] == row['mthd_group'])],  # 1순위: 기관+계약방식
+        large_df[same_org & (large_df['busiDivs'] == row['busiDivs'])],      # 2순위: 기관+사업유형
+        large_df[same_org],                                                  # 3순위: 같은 기관
     ]
-    if not cand2.empty:
-      target_idx = cand2['sample_count'].idxmax()
-      large_df.loc[target_idx, 'sample_count'] += s_cnt
-      large_df.loc[target_idx, 'fail_count'] += f_cnt
-      matched = True
+    for cand in candidates:
+        if not cand.empty:
+            return cand['sample_count'].idxmax()
+    return None
 
-  # [안전장치] 1, 2순위 모두 못 찾았다면 해당 기관의 가장 큰 그룹에 흡수
-  if not matched:
-    cand3 = large_df[large_df['org_group'] == org]
-    if not cand3.empty:
-      target_idx = cand3['sample_count'].idxmax()
-      large_df.loc[target_idx, 'sample_count'] += s_cnt
-      large_df.loc[target_idx, 'fail_count'] += f_cnt
 
-# 7. 흡수 완료 후 유찰률(fail_rate) 재계산 및 포맷팅
+# 3. 소표본을 기준 조합에 흡수 (건수 합산 + 어디로 흡수됐는지 기록)
+print('🔄 소표본 흡수 작업 중...')
+targets = []
+for _, row in small_df.iterrows():
+    t = find_target(row)
+    targets.append(t)
+    if t is not None:
+        large_df.loc[t, 'sample_count'] += row['own_count']
+        large_df.loc[t, 'fail_count'] += row['fail_count']
+small_df['target_idx'] = targets
+
+# 4. 흡수 후 유찰률 계산
 large_df['fail_rate'] = large_df['fail_count'] / large_df['sample_count']
-large_df['fail_rate_pct'] = (large_df['fail_rate'] * 100).round(2).astype(
-    str
-) + '%'
+large_df['absorbed_into'] = ''
 
-# 8. 최종 룩업 테이블 저장
-large_df[[
-    'org_group',
-    'mthd_group',
-    'busiDivs',
-    'sample_count',
-    'fail_rate',
-    'fail_rate_pct',
-]].to_csv(lookup_output_path, index=False, encoding='utf-8-sig')
+# 5. 소표본 조합도 자기 키로 룩업에 남긴다 (흡수 대상의 유찰률·표본 수 사용)
+#    -> 2024년에 같은 조합이 나오면 평균이 아니라 흡수된 위험도가 붙는다.
+absorbed = small_df[small_df['target_idx'].notna()].copy()
+dropped = small_df[small_df['target_idx'].isna()]
 
-print(f'\n🚀 [2021~2023] 수의계약 제외 및 소표본 흡수 룩업 테이블 생성 완료!')
-print(f'📁 저장 경로: {lookup_output_path}')
+if not absorbed.empty:
+    tgt = large_df.loc[absorbed['target_idx'].astype(int)].reset_index(drop=True)
+    absorbed = absorbed.reset_index(drop=True)
+    absorbed['fail_rate'] = tgt['fail_rate']
+    absorbed['sample_count'] = tgt['sample_count']
+    absorbed['absorbed_into'] = tgt['mthd_group'].astype(str) + ' / ' + tgt['busiDivs'].astype(str)
+
+out_cols = KEYS + ['sample_count', 'own_count', 'fail_rate', 'absorbed_into']
+lookup = pd.concat([large_df[out_cols], absorbed[out_cols]], ignore_index=True)
+lookup = lookup.sort_values(KEYS).reset_index(drop=True)
+lookup['fail_rate_pct'] = (lookup['fail_rate'] * 100).round(2).astype(str) + '%'
+
+# 6. 저장
+#    sample_count : 유찰률 계산에 쓰인 표본 수 (흡수된 건수 포함)
+#    own_count    : 그 조합 자체의 원래 건수
+#    absorbed_into: 소표본일 때 흡수된 기준 조합 (기준 조합은 빈칸)
+lookup.to_csv(LOOKUP_PATH, index=False, encoding='utf-8-sig')
+
+print(f'  - 흡수되어 룩업에 남은 소표본 조합: {len(absorbed):,}개')
+print(f'  - 흡수할 곳이 없어 제외된 조합: {len(dropped):,}개 ({int(dropped["own_count"].sum()):,}건)')
+print(f'\n🚀 룩업 테이블 생성 완료! 총 {len(lookup):,}개 조합')
+print(f'📁 저장 경로: {LOOKUP_PATH}')
