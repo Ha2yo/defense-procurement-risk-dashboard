@@ -1,6 +1,7 @@
 from pathlib import Path
 import pandas as pd
 
+
 # 1. 파일 경로 설정 (지정하신 data-kpi 폴더 기준)
 base_path = Path(r'C:\repository\defense-procurement-risk-dashboard\data-kpi')
 base_path.mkdir(parents=True, exist_ok=True)
