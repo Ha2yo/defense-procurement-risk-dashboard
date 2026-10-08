@@ -1,7 +1,7 @@
 # %%
-# 입찰공고, 결과 병합
 from pathlib import Path
 import pandas as pd
+
 
 # 1. 현재 실행 환경에 따른 기준 경로 설정
 try:
@@ -41,6 +41,13 @@ notice_subset = df_notice[['pblancNo', 'pblancOdr', 'busiDivs']].drop_duplicates
 
 print('\n🔗 공고번호 기준으로 데이터 병합(Merge) 진행 중...')
 df_master = pd.merge(df_result, notice_subset, on=merge_keys, how='inner')
+
+# 병합 결과가 공고 1건당 1행인지 확인 (여러 행이면 KPI의 "공고 수"가 부풀려짐)
+dup_rows = int(df_master.duplicated(subset=merge_keys, keep=False).sum())
+if dup_rows:
+    print(f'⚠️ 같은 공고번호-차수가 여러 행인 데이터: {dup_rows:,}행 (공고 1건당 1행이 아닙니다)')
+else:
+    print('✅ 공고번호-차수 기준 중복 없음 (공고 1건당 1행)')
 
 # 5. 유찰 여부(fail_yn) 라벨 생성
 df_master['fail_yn'] = df_master['bidResult'].astype(str).str.contains('유찰').astype(int)
