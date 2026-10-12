@@ -12,7 +12,7 @@ try:
 except NameError:
     BASE_DIR = Path.cwd()
 
-DATA_KPI_DIR = BASE_DIR / 'data-kpi'
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
 master_path = DATA_KPI_DIR / 'bid_master_2021_2025.csv'
 lookup_path = DATA_KPI_DIR / 'risk_lookup_table_absorbed_2021_2023.csv'
 

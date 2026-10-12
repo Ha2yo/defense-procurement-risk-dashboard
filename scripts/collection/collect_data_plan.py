@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, "../..", ".env"))
 
 API_KEY = os.getenv("API_KEY_DATA_PORTAL")
 
@@ -41,7 +41,7 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2
 
 
-RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
+RAW_DIR = os.path.join(BASE_DIR, "../..", "data", "raw")
 os.makedirs(RAW_DIR, exist_ok=True)
 
 SESSION = requests.Session()
