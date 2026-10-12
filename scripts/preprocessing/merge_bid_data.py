@@ -11,11 +11,11 @@ except NameError:
 
 # 2. 디렉토리 구조 설정 및 자동 생성
 # - 원본 데이터용: data/raw/
-DATA_RAW_DIR = BASE_DIR / 'data' / 'raw'
+DATA_RAW_DIR = BASE_DIR / '../..' / 'data' / 'raw'
 DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 # - KPI 결과물용: data-kpi/
-DATA_KPI_DIR = BASE_DIR / 'data-kpi'
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
 DATA_KPI_DIR.mkdir(parents=True, exist_ok=True)
 
 notice_path = DATA_RAW_DIR / 'bid_notice_20210101_20251231.csv'

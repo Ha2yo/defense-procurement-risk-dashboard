@@ -3,11 +3,15 @@ import pandas as pd
 
 
 # 1. 파일 경로 설정 (지정하신 data-kpi 폴더 기준)
-base_path = Path(r'C:\repository\defense-procurement-risk-dashboard\data-kpi')
-base_path.mkdir(parents=True, exist_ok=True)
+try:
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    BASE_DIR = Path.cwd()
 
-master_path = base_path / 'bid_master_2021_2025.csv'
-lookup_output_path = base_path / 'risk_lookup_table_absorbed_2021_2023.csv'
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+master_path = BASE_DIR / '../..' / 'data/kpi' / 'bid_master_2021_2025.csv'
+lookup_output_path = BASE_DIR / '../..' / 'data/kpi' / 'risk_lookup_table_absorbed_2021_2023.csv'
 
 print('📂 마스터 파일 로드 중...')
 df_master = pd.read_csv(master_path, encoding='utf-8-sig')

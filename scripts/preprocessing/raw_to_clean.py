@@ -13,8 +13,8 @@ DATE_END = "20251231"
 
 # 이 .py 파일이 있는 위치를 기준으로 data/raw, data/clean 사용
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
-CLEAN_DIR = os.path.join(BASE_DIR, "data", "clean")
+RAW_DIR = os.path.join(BASE_DIR, "../..", "data", "raw")
+CLEAN_DIR = os.path.join(BASE_DIR, "../..", "data", "clean")
 
 os.makedirs(CLEAN_DIR, exist_ok=True)
 

@@ -9,7 +9,7 @@ try:
 except NameError:
     BASE_DIR = Path.cwd()
 
-DATA_KPI_DIR = BASE_DIR / 'data-kpi'
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
 lookup_path = DATA_KPI_DIR / 'risk_lookup_table_absorbed_2021_2023.csv'
 
 print('📂 룩업 테이블 로드 중...')
