@@ -33,11 +33,11 @@ df_result.columns = df_result.columns.str.strip()
 print(f'  - 공고 원본 파일 건수: {len(df_notice):,}건')
 print(f'  - 입찰 결과 파일 건수: {len(df_result):,}건')
 
-# 3. 공통 키 설정
-merge_keys = ['pblancNo', 'pblancOdr']
+# 3. 공통 키 설정 (요구년도 + 발주기관코드 + 판단번호 + 공고번호 + 공고차수)
+merge_keys = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
 
 # 4. 공고 원본에서 필요한 컬럼만 추출 후 중복 제거
-notice_subset = df_notice[['pblancNo', 'pblancOdr', 'busiDivs']].drop_duplicates(subset=merge_keys)
+notice_subset = df_notice[merge_keys + ['busiDivs']].drop_duplicates(subset=merge_keys)
 
 print('\n🔗 공고번호 기준으로 데이터 병합(Merge) 진행 중...')
 df_master = pd.merge(df_result, notice_subset, on=merge_keys, how='inner')
