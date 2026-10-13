@@ -1,15 +1,16 @@
 # %%
-"""[분석계획 2단계] 분석용 데이터 준비 (기존 KPI 파일과 별개)
+"""[분석계획 2단계] 분석용 데이터 준비
 
 분석 단위: 입찰 결과 품목 1건 = 1행
   키 = 요구년도(demandYear) + 기관코드(orntCode) + 판단번호(dcsNo) + 공고번호(pblancNo) + 차수(pblancOdr) + 품목번호(iemNo)
 
-기존 merge_bid_data.py와 다른 점
   - 공고 파일과 결과 파일을 요구년도+기관코드+판단번호+공고번호+차수로 병합한다.
-  - 발주기관 그룹을 기관코드 첫 글자 기준으로 분류한다 (기존 '기타' 그룹 해체, 방위사업청 분리).
     (공고번호+차수만으로 병합하면 번호가 재사용된 공고에 다른 공고의 사업구분이 붙는다)
-  - 결과는 data-analysis/ 폴더에 새 이름으로 저장하므로 기존 KPI 결과에 영향이 없다.
+  - 기관 그룹은 직접 계산하지 않고 공통 기준표(data/base/org_group_map.csv)를 읽어 붙인다.
+    (기준표는 scripts/kpi/kpi_common.py 실행 시 생성, 없으면 자동 생성)
+  - 결과는 data/analysis/ 폴더에 저장한다 (data/ 폴더는 .gitignore로 업로드 제외).
 """
+import sys
 from pathlib import Path
 import pandas as pd
 
@@ -34,32 +35,8 @@ YEARS = (2021, 2023)
 EXCLUDE_RANK_CONFIRMED = False
 
 
-ARMY_NAME = ('육군', '보병사단', '기갑여단', '포병여단', '화력여단', '공병여단', '기동사단', '군수지원여단', '군단')
-DAPA_NAME = ('방위사업청', '국방기술품질원', '국방과학연구소')
-
-
-def classify_org(name, code):
-    """발주기관 그룹 분류 (기관코드 첫 글자 기준, 기관명에 군 이름이 있으면 우선).
-
-    기관코드 첫 글자: L=육군, H=공군, S=해군/해병대, E=방위사업청, M·U·N·D=국방부직할/합동
-    검토용 대응표: analysis/org_group_map.csv
-    """
-    name, code = str(name), str(code)
-    if '공군' in name:
-        return '공군'
-    if '해군' in name or '해병' in name:
-        return '해군/해병대'
-    if any(k in name for k in DAPA_NAME) or code.startswith('E'):
-        return '방위사업청'
-    if code.startswith('L'):
-        return '육군'
-    if code.startswith('H'):
-        return '공군'
-    if code.startswith('S'):
-        return '해군/해병대'
-    if any(k in name for k in ARMY_NAME):
-        return '육군'
-    return '국방부직할/합동'
+sys.path.insert(0, str(BASE_DIR / 'scripts' / 'kpi'))
+from kpi_common import attach_org_group  # noqa: E402
 
 
 # 1. 원본 로드 (번호 앞자리 0이 사라지지 않도록 문자열로 읽음)
@@ -83,48 +60,8 @@ print(f'  - 병합 후 {len(df):,}행, 사업구분 매칭 실패 {df["busiDivs"
 
 # 4. 파생 변수
 df['year'] = df['opengDate'].str[:4].astype(int)
-df['org_group'] = [classify_org(n, c) for n, c in zip(df['ornt'], df['orntCode'])]
+df = attach_org_group(df)  # 공통 기준표(org_group_map.csv)로 기관 그룹 부여
 df['fail_yn'] = (df['bidResult'] == '유찰').astype(int)
-
-# 4-1. 기관 분류 대응표 저장 (검토용, data/analysis/org_group_map.csv)
-CHECK_NOTES = {
-    '국군제1386부대': '"국군" 직할 부대로 판단(코드 D). 입찰 품목(군 암호체계, 경계용 CCTV, 정보체계 유지보수)상 보안·정보 계열로 보이나, 외부 검색에서 의무대로 나오기도 해 소속 확인 필요',
-    '한미연합군사령부': '한미 연합 사령부로 특정 군에 속하지 않아 국방부직할/합동으로 분류(코드 M)',
-    '제3190부대': '기관명에 소속 단서가 없어 코드(U) 기준 국방부직할/합동으로 분류. 건수가 적어 품목으로도 판단 어려움',
-    '화력여단': '이름상 육군 포병 계열 여단으로 판단했으나 코드는 국방부 계열(M). 입찰 품목(CCTV, 화상회의 장비)으로는 소속 확인 불가',
-    '제2기갑여단': '이름상 육군 기갑여단으로 판단(전차 폭음장치 등 구매)했으나 코드는 국방부 계열(U)',
-    '제3포병여단': '이름상 육군 포병여단으로 판단했으나 코드는 국방부 계열(M). 전체 기간 1건',
-    '공중기동정찰사령부': '기관명에 군 명시가 없어 코드(H) 기준 공군으로 분류. 2021~2023년 1건',
-    '국방과학연구소': '방위사업청 산하기관으로 판단해 방위사업청 그룹에 포함(코드는 M). 국방부직할/합동으로 볼 수도 있음',
-    '국방기술품질원': '방위사업청 산하기관으로 판단해 방위사업청 그룹에 포함(코드는 M). 국방부직할/합동으로 볼 수도 있음',
-}
-
-
-def org_rule(name, code):
-    """classify_org가 어떤 근거로 분류했는지 (검사 순서 동일)."""
-    name, code = str(name), str(code)
-    if any(k in name for k in ('공군', '해군', '해병') + DAPA_NAME):
-        return '기관명'
-    if code[:1] in ('E', 'L', 'H', 'S'):
-        return f'코드({code[0]})'
-    if any(k in name for k in ARMY_NAME):
-        return '기관명(부대 유형)'
-    return f'코드({code[:1]})'
-
-
-competitive = df[~df['cntrctMth'].str.contains('수의', na=False)]
-org_map = (
-    competitive.groupby(['ornt', 'orntCode', 'org_group'])['year']
-    .agg(n_2021_2023=lambda y: int(y.between(*YEARS).sum()), n_2021_2025='size')
-    .reset_index()
-)
-org_map['rule'] = [org_rule(n, c) for n, c in zip(org_map['ornt'], org_map['orntCode'])]
-org_map['check'] = org_map['ornt'].isin(CHECK_NOTES.keys()).map({True: '확인 필요', False: ''})
-org_map['note'] = org_map['ornt'].map(CHECK_NOTES).fillna('')
-org_map = org_map[['ornt', 'orntCode', 'org_group', 'rule', 'n_2021_2023', 'n_2021_2025', 'check', 'note']]
-org_map = org_map.sort_values(['org_group', 'n_2021_2023'], ascending=[True, False])
-org_map.to_csv(OUT_DIR / 'org_group_map.csv', index=False, encoding='utf-8-sig')
-print(f'  - 기관 분류 대응표 저장: {OUT_DIR / "org_group_map.csv"} ({len(org_map)}개 기관)')
 
 # 5. 분석 대상 필터
 before = len(df)
