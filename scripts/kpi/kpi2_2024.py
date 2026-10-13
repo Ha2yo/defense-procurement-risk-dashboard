@@ -1,5 +1,6 @@
 # %%
 """[KPI 2] 2024년 위험도 10분위별 실제 유찰률의 단조성 (스피어만 상관계수)."""
+from pathlib import Path
 import pandas as pd
 from scipy.stats import spearmanr
 
