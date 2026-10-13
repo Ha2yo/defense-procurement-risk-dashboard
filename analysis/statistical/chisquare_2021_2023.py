@@ -9,6 +9,8 @@ from kpi_common import load_master, get_train
 print('📂 학습 데이터 로드 중 (수의계약 제외, 2021~2023년)...')
 df_train = get_train(load_master())
 print(f'  - 검정 대상: {len(df_train):,}건\n')
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
+lookup_path = DATA_KPI_DIR / 'risk_lookup_table_absorbed_2021_2023.csv'
 
 
 def run_chi2_test(df, group_col, col_name_kr):

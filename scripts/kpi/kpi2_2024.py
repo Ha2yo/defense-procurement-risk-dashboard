@@ -7,6 +7,16 @@ from kpi_common import (
     LOOKUP_PATH, load_master, get_train, get_eval, attach_risk, sort_by_risk,
 )
 
+# 1. 기준 경로 설정
+try:
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    BASE_DIR = Path.cwd()
+
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
+master_path = DATA_KPI_DIR / 'bid_master_2021_2025.csv'
+lookup_path = DATA_KPI_DIR / 'risk_lookup_table_absorbed_2021_2023.csv'
+
 print('📂 마스터 데이터 및 룩업 테이블 로드 중...')
 df_master = load_master()
 df_lookup = pd.read_csv(LOOKUP_PATH, encoding='utf-8-sig')

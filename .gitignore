@@ -1,7 +1,6 @@
 .env
 
-data/raw/*.csv
-data/clean/*.csv
+data
 
 __pycache__/
 *.pyc

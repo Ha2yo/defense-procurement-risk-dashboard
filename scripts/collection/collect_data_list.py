@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 # ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(BASE_DIR, "../..", ".env"))
 
 API_KEY = os.getenv("API_KEY_DATA_PORTAL")
 
@@ -22,22 +22,27 @@ if not API_KEY:
         "API_KEY_DATA_PORTAL을 .env에서 읽지 못했습니다."
     )
 
-URL_CONTRACT = (
-    "https://apis.data.go.kr/1690000/CntrctInfoService/getDmstcCntrctInfoList"
+URL_GONGGO = (
+    "https://apis.data.go.kr/1690000/"
+    "BidPblancInfoService/getDmstcCmpetBidPblancList"
 )
 
-# 사용자는 이 두 값만 바꾸면 됩니다. (YYYYMM)
+URL_RESULT = (
+    "https://apis.data.go.kr/1690000/"
+    "BidResultInfoService/getDmstcCmpetBidResultList"
+)
+
+# 데이터 수집 기간 설정
 START_MONTH = "202101"
 END_MONTH = "202512"
 
-# 기존 파일의 요청 크기를 유지했습니다.
-CHUNK_SIZE = 5000
+CHUNK_SIZE = 10000
 
 REQUEST_DELAY = 0.2
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-RAW_DIR = os.path.join(BASE_DIR, "data", "raw")
+RAW_DIR = os.path.join(BASE_DIR, "../..", "data", "raw")
 os.makedirs(RAW_DIR, exist_ok=True)
 
 SESSION = requests.Session()
@@ -180,7 +185,6 @@ def collect_period(
     """
     페이지네이션 없이 기간을 수집합니다.
 
-    - Page 1만 요청
     - totalCount <= CHUNK_SIZE: 한 번에 수집 완료
     - totalCount > CHUNK_SIZE: 날짜 구간을 절반으로 자동 분할
     - 하루 자체가 CHUNK_SIZE를 초과하면 안전을 위해 중단
@@ -449,38 +453,105 @@ def save_collection_log(log_df, path):
     )
 
 
+def print_notice_key_stats(df, label):
+    """프로젝트의 공고 식별 컬럼 조합 개수를 참고용으로 출력합니다."""
+    key_cols = [
+        "demandYear",
+        "orntCode",
+        "dcsNo",
+        "pblancNo",
+        "pblancOdr",
+    ]
+
+    if all(col in df.columns for col in key_cols):
+        unique_keys = (
+            df[key_cols]
+            .fillna("")
+            .astype(str)
+            .drop_duplicates()
+            .shape[0]
+        )
+
+        print(
+            f"{label} 고유 noticeKey 조합 : "
+            f"{unique_keys:,}건"
+        )
+
+
 # ============================================================
 # 3. 실행
 # ============================================================
 
 def main():
-    contract_df, log_df, full_begin, full_end = collect_month_range(
-        name="국내 계약정보 목록",
-        url=URL_CONTRACT,
-        begin_param="cntrctDateBegin",
-        end_param="cntrctDateEnd",
+    # --------------------------------------------------------
+    # 국내 경쟁입찰공고
+    # --------------------------------------------------------
+    gonggo_df, gonggo_log_df, full_begin, full_end = collect_month_range(
+        name="국내 경쟁입찰공고 목록",
+        url=URL_GONGGO,
+        begin_param="opengDateBegin",
+        end_param="opengDateEnd",
     )
 
-    contract_path = os.path.join(
+    gonggo_path = os.path.join(
         RAW_DIR,
-        f"contract_info_{full_begin}_{full_end}.csv",
+        f"bid_notice_{full_begin}_{full_end}.csv",
     )
 
-    log_path = os.path.join(
+    gonggo_log_path = os.path.join(
         RAW_DIR,
-        f"contract_info_collection_log_{full_begin}_{full_end}.csv",
+        f"bid_notice_collection_log_{full_begin}_{full_end}.csv",
     )
 
-    contract_df.to_csv(
-        contract_path,
+    gonggo_df.to_csv(
+        gonggo_path,
         index=False,
         encoding="utf-8-sig",
     )
-    save_collection_log(log_df, log_path)
+    save_collection_log(
+        gonggo_log_df,
+        gonggo_log_path,
+    )
 
-    duplicate_count = (
-        int(contract_df.duplicated().sum())
-        if not contract_df.empty
+    # --------------------------------------------------------
+    # 국내 경쟁입찰결과
+    # --------------------------------------------------------
+    result_df, result_log_df, result_begin, result_end = collect_month_range(
+        name="국내 경쟁입찰결과 목록",
+        url=URL_RESULT,
+        begin_param="opengDateBegin",
+        end_param="opengDateEnd",
+    )
+
+    result_path = os.path.join(
+        RAW_DIR,
+        f"bid_result_{result_begin}_{result_end}.csv",
+    )
+
+    result_log_path = os.path.join(
+        RAW_DIR,
+        f"bid_result_collection_log_{result_begin}_{result_end}.csv",
+    )
+
+    result_df.to_csv(
+        result_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+    save_collection_log(
+        result_log_df,
+        result_log_path,
+    )
+
+    gonggo_duplicates = (
+        int(gonggo_df.duplicated().sum())
+        if not gonggo_df.empty
+        else 0
+    )
+
+    result_duplicates = (
+        int(result_df.duplicated().sum())
+        if not result_df.empty
         else 0
     )
 
@@ -488,32 +559,32 @@ def main():
     print("=" * 70)
     print("최종 수집 결과")
     print("=" * 70)
-    print(f"계약정보 목록 : {len(contract_df):,}건")
-    print(f"완전중복     : {duplicate_count:,}건")
-    print(f"수집구간 수  : {len(log_df):,}개")
+    print(f"공고 목록 : {len(gonggo_df):,}건")
+    print(f"공고 완전중복 : {gonggo_duplicates:,}건")
+    print_notice_key_stats(gonggo_df, "공고")
     print()
-    print("계약정보 CSV:")
-    print(contract_path)
-    print()
-    print("수집 검증 로그 CSV:")
-    print(log_path)
+    print(f"결과 목록 : {len(result_df):,}건")
+    print(f"결과 완전중복 : {result_duplicates:,}건")
+    print_notice_key_stats(result_df, "결과")
 
-    if "cntrctSttus" in contract_df.columns:
+    print()
+    print("공고 CSV:")
+    print(gonggo_path)
+    print("공고 수집 검증 로그:")
+    print(gonggo_log_path)
+
+    print()
+    print("결과 CSV:")
+    print(result_path)
+    print("결과 수집 검증 로그:")
+    print(result_log_path)
+
+    if "bidResult" in result_df.columns:
         print()
-        print("계약상태(cntrctSttus) 종류")
+        print("입찰결과(bidResult) 종류")
         print("-" * 40)
         print(
-            contract_df["cntrctSttus"].value_counts(
-                dropna=False
-            )
-        )
-
-    if "cntrctMth" in contract_df.columns:
-        print()
-        print("계약방법(cntrctMth) 종류")
-        print("-" * 40)
-        print(
-            contract_df["cntrctMth"].value_counts(
+            result_df["bidResult"].value_counts(
                 dropna=False
             )
         )
