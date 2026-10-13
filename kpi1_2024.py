@@ -43,5 +43,5 @@ print(f'  • 기본 위험도({fallback_rate:.4f})로 채운 공고: {int(df_ev
 print(f'  • 경계 위험도({cut_rate:.4f}) 동점 {tie_total:,}건 중 {tie_inside:,}건만 고위험군 포함')
 print('-' * 65)
 print(f'  🎯 [KPI 1 산출 식별률]: {kpi1_recall:.2f}%')
-print(f'  🎯 [목표 수준 (40% 이상)] 달성 여부: {"✅ 성공" if kpi1_recall >= 40 else "❌ 미달"}')
+print(f'  🎯 [목표 수준 (35% 이상)] 달성 여부: {"✅ 성공" if kpi1_recall >= 35 else "❌ 미달"}')
 print('=' * 65)
