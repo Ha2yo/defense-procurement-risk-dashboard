@@ -25,7 +25,7 @@ def classify_org(name, code):
 
     기관코드 첫 글자: L=육군, H=공군, S=해군/해병대, E=방위사업청, M·U·N·D=국방부직할/합동
     기관명에 공군·해군·해병·방위사업청이 명시되면 코드보다 우선한다.
-    검토용 대응표: analysis/org_group_map.csv
+    검토용 대응표: data/analysis/org_group_map.csv (analysis/01_prepare_data.py 실행 시 생성)
     """
     name, code = str(name), str(code)
     if '공군' in name:
