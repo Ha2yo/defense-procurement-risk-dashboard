@@ -1,8 +1,8 @@
 # %%
 """[분석계획 4·5단계] 기술통계·시각화 + 추론통계
 
-입력: data-analysis/analysis_master_2021_2023.csv  (01_prepare_data.py 결과)
-출력: data-analysis/results/
+입력: data/analysis/analysis_master_2021_2023.csv  (01_prepare_data.py 결과)
+출력: data/analysis/results/
   - rate_<변수>.csv          조건별 건수·유찰 건수·유찰률·조정 표준화 잔차
   - chi2_summary.csv         검정 결과표 (χ², 자유도, p값, Cramér's V, 기대빈도<5 비율)
   - high_risk_categories.csv 잔차 기준 유찰이 유의하게 많은 범주/조합
@@ -24,8 +24,8 @@ try:
 except NameError:
     BASE_DIR = Path.cwd()
 
-INPUT_PATH = BASE_DIR / 'data-analysis' / 'analysis_master_2021_2023.csv'
-OUT_DIR = BASE_DIR / 'data-analysis' / 'results'
+INPUT_PATH = BASE_DIR / 'data' / 'analysis' / 'analysis_master_2021_2023.csv'
+OUT_DIR = BASE_DIR / 'data' / 'analysis' / 'results'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 ALPHA = 0.05

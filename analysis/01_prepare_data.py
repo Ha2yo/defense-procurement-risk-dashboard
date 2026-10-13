@@ -19,7 +19,7 @@ except NameError:
     BASE_DIR = Path.cwd()
 
 RAW_DIR = BASE_DIR / 'data' / 'raw'
-OUT_DIR = BASE_DIR / 'data-analysis'
+OUT_DIR = BASE_DIR / 'data' / 'analysis'
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 NOTICE_PATH = RAW_DIR / 'bid_notice_20210101_20251231.csv'
