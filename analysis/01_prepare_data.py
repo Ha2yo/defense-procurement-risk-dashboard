@@ -30,8 +30,8 @@ JOIN_KEY = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
 UNIT_KEY = JOIN_KEY + ['iemNo']
 YEARS = (2021, 2023)
 
-# 순위확정(최종 낙찰자 미확정) 건을 분석에서 뺄지 여부
-EXCLUDE_RANK_CONFIRMED = True
+# 순위확정 처리: 프로젝트 정의(유찰=1, 낙찰·순위확정=0)에 따라 포함한다. True로 바꾸면 제외
+EXCLUDE_RANK_CONFIRMED = False
 
 
 ARMY_NAME = ('육군', '보병사단', '기갑여단', '포병여단', '화력여단', '공병여단', '기동사단', '군수지원여단', '군단')
