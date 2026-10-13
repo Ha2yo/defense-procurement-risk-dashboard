@@ -5,7 +5,7 @@ import pandas as pd
 from scipy.stats import spearmanr
 
 from kpi_common import (
-    LOOKUP_PATH, load_master, get_train, get_eval, attach_risk, sort_by_risk,
+    LOOKUP_PATH, load_master, get_eval, attach_risk, split_unscored, sort_by_risk,
 )
 
 # 1. 기준 경로 설정
@@ -22,10 +22,9 @@ print('📂 마스터 데이터 및 룩업 테이블 로드 중...')
 df_master = load_master()
 df_lookup = pd.read_csv(LOOKUP_PATH, encoding='utf-8-sig')
 
-# KPI1과 동일한 기본 위험도
-fallback_rate = get_train(df_master)['fail_yn'].mean()
-
-df_eval = attach_risk(get_eval(df_master, 2024), df_lookup, fallback_rate)
+# KPI1과 동일하게 위험도 미산정 공고(흡수할 기준 조합 없음)는 제외
+df_all = attach_risk(get_eval(df_master, 2024), df_lookup)
+df_eval, df_unscored = split_unscored(df_all)
 
 # KPI1과 같은 정렬 규칙으로 줄 세운 뒤 뒤집어서 (저위험 -> 고위험) 10등분
 # 1등급 = 가장 낮은 위험, 10등급 = 가장 높은 위험
@@ -54,7 +53,8 @@ print('=' * 75)
 print(decile_summary.to_string(index=False))
 print('-' * 75)
 print(f'  • 서로 다른 위험도 값: {n_unique}개' + ('  ⚠️ 10개 미만이라 10분위가 동점을 억지로 나눈 것입니다.' if n_unique < 10 else ''))
-print(f'  • 기본 위험도({fallback_rate:.4f})로 채운 공고: {int(df_eval["is_fallback"].sum()):,}건')
+if len(df_unscored):
+    print(f'  • 위험도 미산정으로 제외한 공고: {len(df_unscored):,}건')
 print(f'  🎯 [스피어만 순위 상관계수 (Rho)]: {spearman_rho:.4f}  (목표: 0.85 이상)')
 print(f'  🎯 [통계적 유의성 p-value]: {p_value:.4e}')
 print(f'  🎯 [목표 달성 여부]: {"✅ 성공" if spearman_rho >= 0.85 else "❌ 미달"}')
