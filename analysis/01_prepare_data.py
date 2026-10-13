@@ -86,6 +86,36 @@ df['year'] = df['opengDate'].str[:4].astype(int)
 df['org_group'] = [classify_org(n, c) for n, c in zip(df['ornt'], df['orntCode'])]
 df['fail_yn'] = (df['bidResult'] == '유찰').astype(int)
 
+# 4-1. 기관 분류 대응표 저장 (검토용, data/analysis/org_group_map.csv)
+CHECK_ORGS = ['국군제1386부대', '제3190부대', '제2기갑여단', '화력여단', '제3포병여단',
+              '한미연합군사령부', '공중기동정찰사령부']
+
+
+def org_rule(name, code):
+    """classify_org가 어떤 근거로 분류했는지 (검사 순서 동일)."""
+    name, code = str(name), str(code)
+    if any(k in name for k in ('공군', '해군', '해병') + DAPA_NAME):
+        return '기관명'
+    if code[:1] in ('E', 'L', 'H', 'S'):
+        return f'코드({code[0]})'
+    if any(k in name for k in ARMY_NAME):
+        return '기관명(부대 유형)'
+    return f'코드({code[:1]})'
+
+
+competitive = df[~df['cntrctMth'].str.contains('수의', na=False)]
+org_map = (
+    competitive.groupby(['ornt', 'orntCode', 'org_group'])['year']
+    .agg(n_2021_2023=lambda y: int(y.between(*YEARS).sum()), n_2021_2025='size')
+    .reset_index()
+)
+org_map['rule'] = [org_rule(n, c) for n, c in zip(org_map['ornt'], org_map['orntCode'])]
+org_map['check'] = org_map['ornt'].isin(CHECK_ORGS).map({True: '확인 필요', False: ''})
+org_map = org_map[['ornt', 'orntCode', 'org_group', 'rule', 'n_2021_2023', 'n_2021_2025', 'check']]
+org_map = org_map.sort_values(['org_group', 'n_2021_2023'], ascending=[True, False])
+org_map.to_csv(OUT_DIR / 'org_group_map.csv', index=False, encoding='utf-8-sig')
+print(f'  - 기관 분류 대응표 저장: {OUT_DIR / "org_group_map.csv"} ({len(org_map)}개 기관)')
+
 # 5. 분석 대상 필터
 before = len(df)
 df = df[df['year'].between(*YEARS)]
