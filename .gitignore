@@ -1,6 +1,8 @@
 .env
 
-data
+data/raw
+data/clean
+data/kpi/risk_lookup_table_absorbed_2021_2023.csv
 
 __pycache__/
 *.pyc
