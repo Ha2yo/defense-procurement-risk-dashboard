@@ -163,6 +163,24 @@ for col, label in VARIABLES:
 high_risk = pd.DataFrame(high)
 high_risk.to_csv(OUT_DIR / 'high_risk_categories.csv', index=False, encoding='utf-8-sig')
 
+# 전체 결과를 CSV 하나로 정리 (변수별 범주 결과 + 해당 변수의 검정 결과)
+summary_by_var = {row['변수']: row for row in summaries}
+all_rows = []
+for col, label in VARIABLES:
+    s = summary_by_var[label]
+    r = results[col].copy()
+    r.insert(0, '변수', label)
+    r['χ²'] = s['χ²']
+    r['자유도'] = s['자유도']
+    r['p값'] = f"{s['p값']:.3e}"
+    r["Cramér's V"] = s["Cramér's V"]
+    r['결론'] = s['결론']
+    r['관련 강도'] = s['관련 강도']
+    all_rows.append(r)
+pd.concat(all_rows, ignore_index=True).to_csv(
+    OUT_DIR / 'analysis_summary.csv', index=False, encoding='utf-8-sig'
+)
+
 print('📌 병합 처리')
 print(f'  - 계약방법: 기대 유찰 건수 {MIN_EXPECTED} 미만 범주 {merged_mthd} → 같은 계열로 병합')
 print(f'  - 조합: {len(small_combos)}개 조합({combo_n[small_combos].sum():,}건) → "소표본 조합(병합)"')
