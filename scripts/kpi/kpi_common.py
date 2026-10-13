@@ -16,29 +16,39 @@ TRAIN_YEARS = (2021, 2023)
 MIN_SAMPLE = 10
 
 
-def map_org_group(val):
-    """발주기관명을 5개 그룹으로 분류한다.
+ARMY_NAME = ('육군', '보병사단', '기갑여단', '포병여단', '화력여단', '공병여단', '기동사단', '군수지원여단', '군단')
+DAPA_NAME = ('방위사업청', '국방기술품질원', '국방과학연구소')
 
-    공군·해군을 먼저 검사한다. '사령부'를 먼저 보면
-    공군작전사령부, 해병대사령부 등이 육군으로 잘못 분류되기 때문이다.
+
+def classify_org(name, code):
+    """발주기관 그룹 분류 (analysis/01_prepare_data.py와 같은 규칙).
+
+    기관코드 첫 글자: L=육군, H=공군, S=해군/해병대, E=방위사업청, M·U·N·D=국방부직할/합동
+    기관명에 공군·해군·해병·방위사업청이 명시되면 코드보다 우선한다.
+    검토용 대응표: analysis/org_group_map.csv
     """
-    val_str = str(val)
-    if '공군' in val_str:
-        return '2. 공군계열'
-    elif '해군' in val_str or '해병대' in val_str:
-        return '3. 해군/해병대계열'
-    elif '국방부' in val_str or '합동' in val_str or '근무지원단' in val_str:
-        return '4. 국방부직할/합동'
-    elif '육군' in val_str or '군단' in val_str or '사령부' in val_str:
-        return '1. 육군계열'
-    else:
-        return '기타계열'
+    name, code = str(name), str(code)
+    if '공군' in name:
+        return '공군'
+    if '해군' in name or '해병' in name:
+        return '해군/해병대'
+    if any(k in name for k in DAPA_NAME) or code.startswith('E'):
+        return '방위사업청'
+    if code.startswith('L'):
+        return '육군'
+    if code.startswith('H'):
+        return '공군'
+    if code.startswith('S'):
+        return '해군/해병대'
+    if any(k in name for k in ARMY_NAME):
+        return '육군'
+    return '국방부직할/합동'
 
 
 def load_master():
     """마스터 파일을 읽어 그룹 컬럼을 붙이고 수의계약을 제외한다."""
     df = pd.read_csv(MASTER_PATH, encoding='utf-8-sig')
-    df['org_group'] = df['ornt'].apply(map_org_group)
+    df['org_group'] = [classify_org(n, c) for n, c in zip(df['ornt'], df['orntCode'])]
     df['mthd_group'] = df['cntrctMth']
     is_private = df['cntrctMth'].astype(str).str.contains('수의', na=False)
     return df[~is_private].copy()
