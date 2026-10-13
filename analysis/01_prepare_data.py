@@ -87,8 +87,17 @@ df['org_group'] = [classify_org(n, c) for n, c in zip(df['ornt'], df['orntCode']
 df['fail_yn'] = (df['bidResult'] == '유찰').astype(int)
 
 # 4-1. 기관 분류 대응표 저장 (검토용, data/analysis/org_group_map.csv)
-CHECK_ORGS = ['국군제1386부대', '제3190부대', '제2기갑여단', '화력여단', '제3포병여단',
-              '한미연합군사령부', '공중기동정찰사령부']
+CHECK_NOTES = {
+    '국군제1386부대': '"국군" 직할 부대로 판단(코드 D). 입찰 품목(군 암호체계, 경계용 CCTV, 정보체계 유지보수)상 보안·정보 계열로 보이나, 외부 검색에서 의무대로 나오기도 해 소속 확인 필요',
+    '한미연합군사령부': '한미 연합 사령부로 특정 군에 속하지 않아 국방부직할/합동으로 분류(코드 M)',
+    '제3190부대': '기관명에 소속 단서가 없어 코드(U) 기준 국방부직할/합동으로 분류. 건수가 적어 품목으로도 판단 어려움',
+    '화력여단': '이름상 육군 포병 계열 여단으로 판단했으나 코드는 국방부 계열(M). 입찰 품목(CCTV, 화상회의 장비)으로는 소속 확인 불가',
+    '제2기갑여단': '이름상 육군 기갑여단으로 판단(전차 폭음장치 등 구매)했으나 코드는 국방부 계열(U)',
+    '제3포병여단': '이름상 육군 포병여단으로 판단했으나 코드는 국방부 계열(M). 전체 기간 1건',
+    '공중기동정찰사령부': '기관명에 군 명시가 없어 코드(H) 기준 공군으로 분류. 2021~2023년 1건',
+    '국방과학연구소': '방위사업청 산하기관으로 판단해 방위사업청 그룹에 포함(코드는 M). 국방부직할/합동으로 볼 수도 있음',
+    '국방기술품질원': '방위사업청 산하기관으로 판단해 방위사업청 그룹에 포함(코드는 M). 국방부직할/합동으로 볼 수도 있음',
+}
 
 
 def org_rule(name, code):
@@ -110,8 +119,9 @@ org_map = (
     .reset_index()
 )
 org_map['rule'] = [org_rule(n, c) for n, c in zip(org_map['ornt'], org_map['orntCode'])]
-org_map['check'] = org_map['ornt'].isin(CHECK_ORGS).map({True: '확인 필요', False: ''})
-org_map = org_map[['ornt', 'orntCode', 'org_group', 'rule', 'n_2021_2023', 'n_2021_2025', 'check']]
+org_map['check'] = org_map['ornt'].isin(CHECK_NOTES.keys()).map({True: '확인 필요', False: ''})
+org_map['note'] = org_map['ornt'].map(CHECK_NOTES).fillna('')
+org_map = org_map[['ornt', 'orntCode', 'org_group', 'rule', 'n_2021_2023', 'n_2021_2025', 'check', 'note']]
 org_map = org_map.sort_values(['org_group', 'n_2021_2023'], ascending=[True, False])
 org_map.to_csv(OUT_DIR / 'org_group_map.csv', index=False, encoding='utf-8-sig')
 print(f'  - 기관 분류 대응표 저장: {OUT_DIR / "org_group_map.csv"} ({len(org_map)}개 기관)')
