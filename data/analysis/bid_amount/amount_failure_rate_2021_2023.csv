@@ -1,0 +1,4 @@
+﻿amount_bin,notice_count,failure_count,nonfailure_count,failure_rate_pct
+1천만원 이하,3798,790,3008,20.8
+1천만원 초과~1억원,9299,1567,7732,16.851
+1억원 초과,7601,1000,6601,13.156
