@@ -11,15 +11,15 @@ except NameError:
 
 # 2. 디렉토리 구조 설정 및 자동 생성
 # - 원본 데이터용: data/raw/
-DATA_RAW_DIR = BASE_DIR / '../..' / 'data' / 'raw'
-DATA_RAW_DIR.mkdir(parents=True, exist_ok=True)
+DATA_CLN_DIR = BASE_DIR / '../..' / 'data' / 'clean'
+DATA_CLN_DIR.mkdir(parents=True, exist_ok=True)
 
 # - KPI 결과물용: data-kpi/
 DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
 DATA_KPI_DIR.mkdir(parents=True, exist_ok=True)
 
-notice_path = DATA_RAW_DIR / 'bid_notice_20210101_20251231.csv'
-result_path = DATA_RAW_DIR / 'bid_result_20210101_20251231.csv'
+notice_path = DATA_CLN_DIR / 'bid_notice_clean_20210101_20251231.csv'
+result_path = DATA_CLN_DIR / 'bid_result_clean_20210101_20251231.csv'
 output_path = DATA_KPI_DIR / 'bid_master_2021_2025.csv'  # 👈 data-kpi 폴더 안으로 저장 경로 변경
 
 print('📂 입찰공고 및 입찰결과 원본 파일 로드 중...')
