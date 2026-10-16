@@ -37,7 +37,7 @@ print(f'  - 입찰 결과 파일 건수: {len(df_result):,}건')
 merge_keys = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
 
 # 4. 공고 원본에서 필요한 컬럼만 추출 후 중복 제거
-notice_subset = df_notice[merge_keys + ['busiDivs']].drop_duplicates(subset=merge_keys)
+notice_subset = df_notice[merge_keys + ['busiDivs', 'pblancDate']].drop_duplicates(subset=merge_keys)
 
 print('\n🔗 공고번호 기준으로 데이터 병합(Merge) 진행 중...')
 df_master = pd.merge(df_result, notice_subset, on=merge_keys, how='inner')
@@ -52,11 +52,16 @@ else:
 # 5. 유찰 여부(fail_yn) 라벨 생성
 df_master['fail_yn'] = df_master['bidResult'].astype(str).str.contains('유찰').astype(int)
 
-# 6. 연도 컬럼 추출
-if 'opengDate' in df_master.columns:
-    df_master['year'] = df_master['opengDate'].astype(str).str[:4].astype(int)
-elif 'demandYear' in df_master.columns:
-    df_master['year'] = df_master['demandYear']
+# 5-1. 공고 단위로 묶기: 공고 1건 = 1행          ← 여기부터
+#      품목 중 하나라도 유찰이면 그 공고는 유찰로 본다
+before = len(df_master)
+df_master['fail_yn'] = df_master.groupby(merge_keys)['fail_yn'].transform('max')
+df_master = df_master.drop_duplicates(subset=merge_keys, keep='first').reset_index(drop=True)
+print(f'📦 공고 단위로 묶음: {before:,}행 → {len(df_master):,}행')
+
+# 6. 연도 컬럼 추출: 공고일(pblancDate) 기준
+#    (위험도는 공고 시점에 매기므로 공고일 기준. 개찰일 opengDate 열은 그대로 남겨 둠)
+df_master['year'] = df_master['pblancDate'].astype(str).str[:4].astype(int)
 
 print(f'✨ 병합 및 정제 완료된 마스터 데이터 총 건수: {len(df_master):,}건')
 print(f"  - 사업유형이 성공적으로 장착된 건수: {df_master['busiDivs'].notnull().sum():,}건")

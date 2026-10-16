@@ -105,7 +105,6 @@ def build_org_map():
     DATA_KPI_DIR.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(MASTER_PATH, encoding='utf-8-sig')
-    df['year'] = df['opengDate'].astype(str).str[:4].astype(int)
     comp = df[~df['cntrctMth'].astype(str).str.contains('수의', na=False)]
 
     org_map = df[['ornt', 'orntCode']].drop_duplicates().reset_index(drop=True)
