@@ -52,10 +52,14 @@ else:
 # 5. 유찰 여부(fail_yn) 라벨 생성
 df_master['fail_yn'] = df_master['bidResult'].astype(str).str.contains('유찰').astype(int)
 
-# 5-1. 공고 단위로 묶기: 공고 1건 = 1행          ← 여기부터
-#      품목 중 하나라도 유찰이면 그 공고는 유찰로 본다
+# 5-1. 판단보류 제외: 한 공고 안에 유찰 품목과 낙찰 품목이 섞인 공고 (데이터 항목정의서 기준)
+mixed = df_master.groupby(merge_keys)['fail_yn'].transform('nunique') > 1
+n_mixed = df_master.loc[mixed, merge_keys].drop_duplicates().shape[0]
+df_master = df_master[~mixed]
+print(f'⚖️ 판단보류(유찰·낙찰 혼재) 제외: {n_mixed:,}건 ({mixed.sum():,}행)')
+
+# 5-2. 공고 단위로 묶기: 공고 1건 = 1행 (남은 공고는 품목 결과가 모두 같음)
 before = len(df_master)
-df_master['fail_yn'] = df_master.groupby(merge_keys)['fail_yn'].transform('max')
 df_master = df_master.drop_duplicates(subset=merge_keys, keep='first').reset_index(drop=True)
 print(f'📦 공고 단위로 묶음: {before:,}행 → {len(df_master):,}행')
 
