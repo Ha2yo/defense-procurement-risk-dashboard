@@ -180,91 +180,96 @@ def get_eval(df, year=2024):
 
 # ---------------------------------------------------------------------------
 # 4. 위험도 산정 단계 (룩업 테이블 생성과 2024년 위험도 부여에서 같은 규칙 사용)
+#    표본이 10건 미만이면 조건을 하나씩 빼고 넓은 범위의 유찰률을 쓴다 (계층적 완화).
 # ---------------------------------------------------------------------------
+STAGE_KEYS = {
+    1: ['org_group', 'mthd_group', 'busiDivs'],   # 자기 조합
+    2: ['org_group', 'busiDivs'],                 # 계약방법 제외
+    3: ['org_group'],                             # 기관그룹만
+    4: [],                                        # 학습 데이터 전체
+}
 STAGE_LABELS = {
     1: '1단계: 자기 조합 (10건 이상)',
-    2: '2단계: 같은 기관그룹+계약방법 조합에 흡수',
-    3: '3단계: 같은 기관그룹+사업구분 조합에 흡수',
-    4: '4단계: 같은 기관그룹 최대 조합에 흡수',
+    2: '2단계: 기관그룹×사업구분 전체 유찰률',
+    3: '3단계: 기관그룹 전체 유찰률',
+    4: '4단계: 학습 데이터 전체 유찰률',
 }
 
 
-def find_absorb_target(base, org, mthd, busi):
-    """표본이 부족한(10건 미만, 0건 포함) 조합을 흡수할 기준 조합을 찾는다.
+def build_lookup(df_train):
+    """단계별 유찰률 표를 만든다 (단계마다 묶는 열만 채우고 나머지는 빈칸).
 
-    base: 10건 이상 기준 조합 표 (sample_count 열 필요)
-    반환: (기준 조합의 인덱스, 단계 2~4), 없으면 (None, None)
+    1단계는 10건 미만 조합도 남긴다 (own_count 확인용). 위험도에는 10건 이상만 쓴다.
     """
-    same_org = base['org_group'] == org
-    candidates = [
-        (2, base[same_org & (base['mthd_group'] == mthd)]),  # 기관+계약방법
-        (3, base[same_org & (base['busiDivs'] == busi)]),    # 기관+사업구분
-        (4, base[same_org]),                                 # 같은 기관
-    ]
-    for stage, cand in candidates:
-        if not cand.empty:
-            return cand['sample_count'].idxmax(), stage
-    return None, None
+    rows = []
+    for stage, cols in STAGE_KEYS.items():
+        if cols:
+            g = (df_train.groupby(cols)['fail_yn']
+                 .agg(sample_count='count', fail_count='sum').reset_index())
+        else:
+            g = pd.DataFrame({'sample_count': [len(df_train)], 'fail_count': [df_train['fail_yn'].sum()]})
+        g['stage'] = stage
+        rows.append(g)
+    lookup = pd.concat(rows, ignore_index=True)[['stage'] + KEYS + ['sample_count', 'fail_count']]
+    lookup['fail_rate'] = lookup['fail_count'] / lookup['sample_count']
+    return lookup
 
 
-def attach_risk(df_eval, df_lookup, fallback_rate=None):
-    """룩업 테이블의 위험도를 붙인다.
-
-    - 룩업에 있는 조합: 룩업의 위험도 (1단계 자기 조합 또는 2~4단계 흡수)
-    - 학습 기간에 0건이라 룩업에 없는 조합: 같은 흡수 규칙(2~4단계)으로 기준 조합의 위험도
-    - 흡수할 곳도 없으면 risk_status='미산정', fail_rate=NaN
-      (fallback_rate를 넘기면 예전처럼 그 값으로 채운다. 비교용)
+def attach_risk(df_eval, df_lookup):
+    """룩업 테이블의 위험도를 1단계부터 차례로 붙인다 (10건 이상인 첫 단계 사용).
 
     붙는 열
       fail_rate     : 위험도
-      sample_count  : 위험도 계산에 쓰인 과거 공고 수 (흡수 포함)
+      sample_count  : 위험도 계산에 쓰인 과거 공고 수
       own_count     : 그 조합 자체의 과거 공고 수 (0이면 학습 기간에 없던 조합)
       risk_stage    : 위험도 산정 단계 1~4
-      applied_combo : 실제 위험도를 가져온 조합 (계약방법 / 사업구분)
-      risk_status   : '산정' / '미산정'
+      applied_combo : 위험도를 가져온 범위 (예: 육군 / 용역)
+      risk_status   : '산정' / '미산정' (4단계가 있어 항상 산정)
     """
-    if 'absorb_stage' not in df_lookup.columns:
-        raise SystemExit('❌ 룩업 테이블에 absorb_stage 열이 없습니다. lookup_table_2021_2023.py를 다시 실행하세요.')
+    if 'stage' not in df_lookup.columns:
+        raise SystemExit('❌ 룩업 테이블 형식이 예전 것입니다. lookup_table_2021_2023.py를 다시 실행하세요.')
 
-    cols = KEYS + ['fail_rate', 'sample_count', 'own_count', 'absorbed_into', 'absorb_stage']
-    out = pd.merge(df_eval, df_lookup[cols], on=KEYS, how='left')
-    out = out.rename(columns={'absorb_stage': 'risk_stage'})
+    out = df_eval.drop(columns=['fail_rate', 'sample_count', 'own_count', 'risk_stage', 'applied_combo'],
+                       errors='ignore').copy()
+    own = df_lookup[df_lookup['stage'] == 1][KEYS + ['sample_count']].rename(columns={'sample_count': 'own_count'})
+    out = out.merge(own, on=KEYS, how='left')
     out['own_count'] = out['own_count'].fillna(0).astype(int)
+    out['fail_rate'] = float('nan')
+    out['sample_count'] = 0
+    out['risk_stage'] = pd.NA
+    out['applied_combo'] = ''
 
-    # 1단계는 자기 조합, 흡수된 조합은 흡수한 기준 조합 이름
-    is_base = out['risk_stage'] == 1
-    out['applied_combo'] = out['absorbed_into']
-    out.loc[is_base, 'applied_combo'] = (
-        out.loc[is_base, 'mthd_group'].astype(str) + ' / ' + out.loc[is_base, 'busiDivs'].astype(str)
-    )
-    out = out.drop(columns=['absorbed_into'])
-
-    # 학습 기간에 없던 조합 → 같은 흡수 규칙 적용
-    base = df_lookup[df_lookup['absorb_stage'] == 1].reset_index(drop=True)
-    unseen = out['fail_rate'].isna()
-    for key, idx in out[unseen].groupby(KEYS).groups.items():
-        t, stage = find_absorb_target(base, *key)
-        if t is None:
-            continue
-        tgt = base.loc[t]
-        out.loc[idx, 'fail_rate'] = tgt['fail_rate']
-        out.loc[idx, 'sample_count'] = tgt['sample_count']
-        out.loc[idx, 'risk_stage'] = stage
-        out.loc[idx, 'applied_combo'] = f"{tgt['mthd_group']} / {tgt['busiDivs']}"
+    for stage, cols in STAGE_KEYS.items():
+        todo = out['fail_rate'].isna()
+        if not todo.any():
+            break
+        ref = df_lookup[(df_lookup['stage'] == stage) & (df_lookup['sample_count'] >= MIN_SAMPLE)]
+        if cols:
+            m = out.loc[todo, cols].reset_index().merge(ref[cols + ['fail_rate', 'sample_count']],
+                                                        on=cols, how='left').set_index('index')
+            m = m[m['fail_rate'].notna()]
+            combo = m[cols].astype(str).agg(' / '.join, axis=1)
+        else:
+            m = pd.DataFrame(index=out.index[todo])
+            m['fail_rate'] = ref['fail_rate'].iloc[0]
+            m['sample_count'] = ref['sample_count'].iloc[0]
+            combo = pd.Series('전체', index=m.index)
+        out.loc[m.index, 'fail_rate'] = m['fail_rate']
+        out.loc[m.index, 'sample_count'] = m['sample_count']
+        out.loc[m.index, 'risk_stage'] = stage
+        out.loc[m.index, 'applied_combo'] = combo
 
     out['is_fallback'] = out['fail_rate'].isna()
     out['risk_status'] = out['is_fallback'].map({True: '미산정', False: '산정'})
-    out['sample_count'] = out['sample_count'].fillna(0).astype(int)
+    out['sample_count'] = out['sample_count'].astype(int)
     out['risk_stage'] = out['risk_stage'].astype('Int64')
-    if fallback_rate is not None:
-        out['fail_rate'] = out['fail_rate'].fillna(fallback_rate)
     return out
 
 
 def split_unscored(df):
     """위험도 산정 공고와 미산정 공고를 나눈다. KPI는 산정 공고만으로 계산한다.
 
-    현재 기관그룹 5개는 모두 10건 이상 조합이 있어 미산정은 0건이다 (안전장치).
+    4단계(학습 데이터 전체)가 있어 미산정은 생기지 않는다 (안전장치).
     """
     is_unscored = df['risk_status'] == '미산정'
     return df[~is_unscored].copy(), df[is_unscored].copy()
