@@ -15,7 +15,6 @@ python collect_data_list.py
 python collect_data_contract.py
 
 ## 데이터 정제
-
 python raw_to_clean.py
 
 
@@ -60,6 +59,45 @@ python analysis/01_prepare_data.py
 ### 2. 유찰 조건 분석
 python analysis/02_analysis.py
 - 기관·계약방법·사업구분별 유찰률표, 카이제곱 검정·Cramér's V, 막대그래프
+
+## 기관 분류 확인 (scripts/ornt)
+
+### 1. 기관 목록
+python scripts/ornt/orntCode_unique.py
+- 공고 CLEAN 데이터에서 기관코드(orntCode) 기준 기관 목록(226개) 생성
+
+### 2. 기관별 품목명세서 표본 수집
+python scripts/ornt/collect_ornt_item_sample.py
+- 기관별 공고 1건의 품목명세서 API 호출, 군 구분(miltDivs·codeVld4) 수집
+
+### 3. 기관별 소요군 분포
+python scripts/ornt/compare_ornt_codeVld4.py
+- 품목명세서 전체에서 기관별 codeVld4(소요군) 분포·비율·군종류수 집계
+---------------------------------------------------------
+## A2.공고기간 분석
+분석 순서: 데이터 전처리 → 유찰률 통계 분석 → 연도별 비교
+### 1.공고기간 데이터 전처리
+
+preprocess_bid_period.py
+
+=> 입찰공고와 입찰결과 데이터를 공고키(noticeKey)로 연결
+공고일과 참가등록마감일을 활용한 공고기간 계산
+공고기간 구간 분류(5일 이하 / 5일 초과~10일 / 10일 초과) 및 분석대상 추출
+### 2. 공고기간별 유찰률 통계 분석
+
+analyze_bid_period.py
+
+=>공고기간 기초통계 및 구간별 유찰률 산출
+카이제곱 독립성 검정을 통한 공고기간과 유찰 여부의 통계적 연관성 분석
+
+### 3.연도별 공고기간 및 유찰률 비교
+
+compare_bid_period_years.py
+
+=>2021~2023년과 2024년의 공고기간 및 유찰률 비교
+연도별 유찰률 추세 분석 및 선 그래프 생성
+기간별 카이제곱 검정 결과 비교 및 검증
+--------------------------------------------
 
 ## 폴더 구조
 
