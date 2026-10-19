@@ -1,0 +1,2 @@
+﻿period,valid_count,mean_krw,median_krw,q1_krw,q3_krw,iqr_krw,lower_fence_krw,upper_fence_krw,iqr_outlier_count,iqr_outlier_rate_pct,zero_amount_count,small_positive_under_1000_count
+2021_2023,20698,769798318.2848309,54609509.5,16600000.0,167189215.5,150589215.5,-209283823.25,393073038.75,2495,12.054,0,426

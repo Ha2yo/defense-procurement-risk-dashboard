@@ -58,18 +58,32 @@ CONTRACT_CLEAN_PATH = os.path.join(
     f"contract_info_clean_{DATE_BEGIN}_{DATE_END}.csv",
 )
 
+# 품목명세서는 collect_data_item.py로 별도 수집한다.
+ITEM_RAW_PATH = os.path.join(
+    RAW_DIR,
+    f"bid_item_{DATE_BEGIN}_{DATE_END}.csv",
+)
+
+ITEM_CLEAN_PATH = os.path.join(
+    CLEAN_DIR,
+    f"bid_item_clean_{DATE_BEGIN}_{DATE_END}.csv",
+)
+
 
 # ============================================================
 # 2. RAW 데이터 로드
 # ============================================================
 
 
-def read_raw_csv(path, name):
+def read_raw_csv(path, name, keep_default_na=True):
     """
     모든 원본 컬럼을 문자열로 읽는다.
 
     식별번호의 앞자리 0이 사라지거나 숫자로 자동 변환되는 것을
     방지하기 위해 dtype=str을 사용한다.
+
+    keep_default_na=False이면 'NA', 'N/A' 같은 문자열을 결측으로
+    바꾸지 않고 원문 그대로 읽는다.
     """
 
     if not os.path.exists(path):
@@ -82,6 +96,7 @@ def read_raw_csv(path, name):
         dtype=str,
         low_memory=False,
         encoding="utf-8-sig",
+        keep_default_na=keep_default_na,
     )
 
     print(
@@ -99,6 +114,21 @@ plan = read_raw_csv(PLAN_RAW_PATH, "조달계획")
 notice = read_raw_csv(NOTICE_RAW_PATH, "입찰공고")
 result = read_raw_csv(RESULT_RAW_PATH, "입찰결과")
 contract = read_raw_csv(CONTRACT_RAW_PATH, "계약정보")
+
+# 품목명세서 RAW가 없는 환경에서는 기존 4개 데이터만 정제한다.
+if os.path.exists(ITEM_RAW_PATH):
+    # 품목명세서의 miltDivs 'NA'(군비검증단)는 실제 코드값이므로
+    # 기본 결측 문자열 변환을 끄고 읽는다.
+    item = read_raw_csv(
+        ITEM_RAW_PATH,
+        "품목명세서",
+        keep_default_na=False,
+    )
+else:
+    item = None
+    print(
+        f"품목명세서: RAW 파일이 없어 건너뜁니다\n{ITEM_RAW_PATH}"
+    )
 
 
 # ============================================================
@@ -135,11 +165,17 @@ notice = clean_string_columns(notice)
 result = clean_string_columns(result)
 contract = clean_string_columns(contract)
 
+if item is not None:
+    item = clean_string_columns(item)
+
 # 키 추가 전의 원본 컬럼 순서를 보존
 PLAN_ORIGINAL_COLUMNS = plan.columns.tolist()
 NOTICE_ORIGINAL_COLUMNS = notice.columns.tolist()
 RESULT_ORIGINAL_COLUMNS = result.columns.tolist()
 CONTRACT_ORIGINAL_COLUMNS = contract.columns.tolist()
+
+if item is not None:
+    ITEM_ORIGINAL_COLUMNS = item.columns.tolist()
 
 
 # ============================================================
@@ -176,6 +212,9 @@ plan = remove_exact_duplicates(plan, "조달계획")
 notice = remove_exact_duplicates(notice, "입찰공고")
 result = remove_exact_duplicates(result, "입찰결과")
 contract = remove_exact_duplicates(contract, "계약정보")
+
+if item is not None:
+    item = remove_exact_duplicates(item, "품목명세서")
 
 
 # ============================================================
@@ -328,6 +367,18 @@ contract = make_key(
 )
 
 
+# ------------------------------------------------------------
+# 품목명세서: 원본 + businessKey
+# 품목 행은 사업 단위 1:N이므로 행을 합치거나 줄이지 않는다.
+# ------------------------------------------------------------
+if item is not None:
+    item = make_key(
+        item,
+        BUSINESS_KEY_COLUMNS,
+        "businessKey",
+    )
+
+
 # ============================================================
 # 6. 원본 컬럼 보존 및 추가 컬럼 검증
 # ============================================================
@@ -407,6 +458,14 @@ validate_columns(
     "계약정보",
 )
 
+if item is not None:
+    validate_columns(
+        item,
+        ITEM_ORIGINAL_COLUMNS,
+        ["businessKey"],
+        "품목명세서",
+    )
+
 
 # ============================================================
 # 7. 연결키 결측 / 구조 확인
@@ -442,6 +501,9 @@ print_key_summary(result, "contractLinkKey", "입찰결과")
 
 print_key_summary(contract, "contractLinkKey", "계약정보")
 
+if item is not None:
+    print_key_summary(item, "businessKey", "품목명세서")
+
 
 # ============================================================
 # 8. CLEAN 데이터 저장
@@ -471,6 +533,13 @@ contract.to_csv(
     encoding="utf-8-sig",
 )
 
+if item is not None:
+    item.to_csv(
+        ITEM_CLEAN_PATH,
+        index=False,
+        encoding="utf-8-sig",
+    )
+
 
 print()
 print("=" * 70)
@@ -496,3 +565,9 @@ print(
     f"계약정보 : {len(contract):,}행 / "
     f"{len(contract.columns)}개 컬럼\n{CONTRACT_CLEAN_PATH}"
 )
+
+if item is not None:
+    print(
+        f"품목명세서 : {len(item):,}행 / "
+        f"{len(item.columns)}개 컬럼\n{ITEM_CLEAN_PATH}"
+    )

@@ -1,6 +1,16 @@
+# 환경변수
 .env
 
-data
+# 원본 및 정제 데이터
+data/raw
+data/clean
 
+# KPI 데이터
+data/kpi/risk_lookup_table_absorbed_2021_2023.csv
+
+# Python 캐시
 __pycache__/
 *.pyc
+
+# A5 분석 결과 CSV 제외
+/data/analysis/a5_output_project/
