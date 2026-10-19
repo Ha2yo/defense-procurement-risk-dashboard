@@ -24,6 +24,11 @@ RESULT_FILE = os.path.join(
     DATA_DIR,
     "bid_result_clean_20210101_20251231.csv",
 )
+# 품목명세서: 기초금액 결측·단가 의심 공고의 보완 가능성 검토에만 사용
+ITEM_FILE = os.path.join(
+    DATA_DIR,
+    "bid_item_clean_20210101_20251231.csv",
+)
 
 
 # ============================================================
@@ -545,6 +550,243 @@ def draw_yearly_line_chart(filtered):
 
 
 # ============================================================
+# 9. 기간별 구간 유찰률 비교표 (전체 행·차이 포함)
+# ============================================================
+PERIODS = {
+    "2021_2023": (2021, 2023),
+    "2024": (2024, 2024),
+}
+
+
+def compare_periods(filtered):
+    """구간별 유찰률에 기간 전체 행과 2024 - 2021~2023 차이(%p)를 붙여 저장한다."""
+    usable = filtered.dropna(subset=["amount_bin"])
+    parts = {}
+    for period, (start, end) in PERIODS.items():
+        data = usable[usable.year.between(start, end)]
+        table = (
+            data.groupby("amount_bin", observed=False)
+            .agg(notice_count=("fail", "size"), failure_count=("fail", "sum"))
+            .reindex(LABELS)
+        )
+        table.loc["전체"] = [len(data), int(data.fail.sum())]
+        table["failure_rate_pct"] = (
+            table.failure_count / table.notice_count * 100
+        ).round(2)
+        parts[period] = table
+
+    out = pd.concat(parts, axis=1)
+    out.columns = [f"{period}_{col}" for period, col in out.columns]
+    out["diff_pp"] = (
+        out["2024_failure_rate_pct"] - out["2021_2023_failure_rate_pct"]
+    ).round(2)
+    out.index.name = "amount_bin"
+    out.to_csv(
+        os.path.join(OUT_DIR, "amount_failure_rate_period_comparison.csv"),
+        encoding="utf-8-sig",
+    )
+    print("\n[기간별 금액 구간 유찰률 비교]")
+    print(out.to_string())
+
+
+# ============================================================
+# 10. 품목명세서 금액 검증 및 기초금액 보완 가능성
+# ============================================================
+def to_amount_bin(amount):
+    """4-7과 같은 경계로 금액 구간을 만든다."""
+    return pd.cut(
+        amount,
+        bins=[-0.001, 10_000_000, 100_000_000, np.inf],
+        labels=LABELS,
+        include_lowest=True,
+    )
+
+
+def load_item():
+    item = pd.read_csv(
+        ITEM_FILE,
+        dtype="string",
+        encoding="utf-8-sig",
+        usecols=[
+            "businessKey", "prcmRnum", "dlvrPrrk",
+            "ordrUtpr", "dlvrQnty", "totlAmnt",
+        ],
+        keep_default_na=False,
+    )
+    for col in item.columns:
+        item[col] = item[col].str.strip().replace("", pd.NA)
+
+    for col in ["ordrUtpr", "dlvrQnty", "totlAmnt"]:
+        item[f"{col}_num"] = pd.to_numeric(item[col], errors="coerce")
+
+    print(f"\n품목명세서 {len(item):,}행")
+    return item
+
+
+def check_item_amount(item):
+    """단가 x 수량과 총금액을 비교한다. 불일치를 오류로 단정하지 않고 구분만 한다."""
+    nums = ["ordrUtpr_num", "dlvrQnty_num", "totlAmnt_num"]
+    computable = item[nums].notna().all(axis=1)
+    diff = (item.ordrUtpr_num * item.dlvrQnty_num - item.totlAmnt_num).abs()
+
+    status = pd.Series("계산 불가", index=item.index)
+    status[computable & diff.eq(0)] = "정확 일치"
+    status[computable & diff.gt(0) & diff.lt(1)] = "반올림 오차"
+    status[computable & diff.ge(1)] = "불일치"
+
+    labels = ["정확 일치", "반올림 오차", "불일치", "계산 불가"]
+    summary = pd.DataFrame({
+        "category": labels,
+        "criterion": [
+            "차이 0", "0 < 차이 < 1원", "차이 >= 1원", "단가·수량·총액 중 결측",
+        ],
+        "row_count": [int(status.eq(label).sum()) for label in labels],
+    })
+    summary.loc[len(summary)] = ["합계", "", len(item)]
+    summary.to_csv(
+        os.path.join(OUT_DIR, "item_amount_check_summary.csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    # 고유해야 하는 사업키·조달요구번호·납품순위가 겹치면 합산 전 검토 대상
+    dup_keys = ["businessKey", "prcmRnum", "dlvrPrrk"]
+    dup = item[item.duplicated(subset=dup_keys, keep=False)]
+    dup[dup_keys + ["ordrUtpr", "dlvrQnty", "totlAmnt"]].sort_values(dup_keys).to_csv(
+        os.path.join(OUT_DIR, "item_duplicate_key_rows.csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+
+    print("\n[품목명세서 금액 검증]")
+    print(summary.to_string(index=False))
+    print(f"사업키·조달요구번호·납품순위 중복 행: {len(dup):,}건")
+
+
+def item_business_sum(item):
+    """사업별 품목 총액. totlAmnt 결측 행은 합산에서 빼고 결측 행 수를 남긴다."""
+    return item.groupby("businessKey").agg(
+        item_rows=("totlAmnt", "size"),
+        item_amount_missing_rows=("totlAmnt_num", lambda s: int(s.isna().sum())),
+        item_sum=("totlAmnt_num", lambda s: s.sum(min_count=1)),
+    )
+
+
+def check_coverage(filtered):
+    """기초금액 결측·1,000원 미만 공고 중 품목 총액으로 보완 가능한 건수를 센다."""
+    rows = []
+    reviews = []
+    review_cols = [
+        "noticeKey", "businessKey", "year", "bsicExpt", "amount", "fail",
+        "amount_bin", "item_sum", "item_rows", "item_amount_missing_rows",
+    ]
+
+    for period, (start, end) in PERIODS.items():
+        data = filtered[filtered.year.between(start, end)]
+        missing = data.amount.isna()
+        small = data.amount.between(0, 1000, inclusive="neither")
+        has_item = data.item_sum > 0
+
+        rows.append({
+            "period": period,
+            "target_count": len(data),
+            "amount_valid": int((~missing).sum()),
+            "amount_missing": int(missing.sum()),
+            "missing_with_item_sum": int((missing & has_item).sum()),
+            "small_under_1000": int(small.sum()),
+            "small_with_item_sum": int((small & has_item).sum()),
+        })
+
+        review = data.loc[missing | small, review_cols].copy()
+        review["review_reason"] = np.where(
+            missing[review.index], "기초금액 결측", "1,000원 미만 양수"
+        )
+        review["item_sum_bin"] = to_amount_bin(review.item_sum)
+        reviews.append(review)
+
+    table = pd.DataFrame(rows)
+    table.to_csv(
+        os.path.join(OUT_DIR, "amount_item_coverage.csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+    pd.concat(reviews).sort_values(["review_reason", "year", "noticeKey"]).to_csv(
+        os.path.join(OUT_DIR, "amount_item_review_candidates.csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+    print("\n[기초금액 결측·1,000원 미만 공고의 품목 총액 보완 가능 건수]")
+    print(table.to_string(index=False))
+
+
+def ratio_summary(scope, data):
+    """품목총액 ÷ 기초금액 분포와 금액 구간 일치율 (기초금액·품목총액 모두 양수인 공고)."""
+    both = data[(data.amount > 0) & (data.item_sum > 0)]
+    ratio = both.item_sum / both.amount
+    q = ratio.quantile([0.1, 0.25, 0.5, 0.75, 0.9])
+    return {
+        "scope": scope,
+        "notice_count": len(data),
+        "both_positive": len(both),
+        "ratio_p10": round(q[0.1], 3),
+        "ratio_q1": round(q[0.25], 3),
+        "ratio_median": round(q[0.5], 3),
+        "ratio_q3": round(q[0.75], 3),
+        "ratio_p90": round(q[0.9], 3),
+        "within_10pct": round(
+            ratio.between(0.9, 1.1, inclusive="neither").mean() * 100, 1
+        ),
+        "within_50pct": round(
+            ratio.between(0.5, 1.5, inclusive="neither").mean() * 100, 1
+        ),
+        "same_bin_pct": round(
+            (to_amount_bin(both.amount) == to_amount_bin(both.item_sum)).mean() * 100, 1
+        ),
+    }
+
+
+def compare_item_ratio(notice, filtered, biz_sum):
+    """전체 입찰공고와 기간별 금액 분석 대상에서 품목 총액의 대리변수 적합성을 본다."""
+    all_notice = notice[["businessKey", "bsicExpt"]].copy()
+    all_notice["amount"] = pd.to_numeric(
+        all_notice.bsicExpt.str.replace(",", "", regex=False),
+        errors="coerce",
+    )
+    all_notice["item_sum"] = all_notice.businessKey.map(biz_sum.item_sum)
+
+    rows = [ratio_summary("전체 입찰공고", all_notice)]
+    for period, (start, end) in PERIODS.items():
+        rows.append(ratio_summary(
+            f"금액 분석 대상 {period}",
+            filtered[filtered.year.between(start, end)],
+        ))
+
+    table = pd.DataFrame(rows)
+    table.to_csv(
+        os.path.join(OUT_DIR, "amount_item_ratio_summary.csv"),
+        index=False,
+        encoding="utf-8-sig",
+    )
+    print("\n[품목총액 ÷ 기초금액]")
+    print(table.to_string(index=False))
+
+
+def analyze_item_amount(notice, filtered):
+    """품목명세서 CLEAN이 있을 때만 실행한다. 기존 금액 분석 결과는 바꾸지 않는다."""
+    if not os.path.exists(ITEM_FILE):
+        print(f"\n품목명세서 CLEAN이 없어 품목 금액 검토를 건너뜁니다:\n{ITEM_FILE}")
+        return
+
+    item = load_item()
+    check_item_amount(item)
+
+    biz_sum = item_business_sum(item)
+    filtered = filtered.join(biz_sum, on="businessKey")
+    check_coverage(filtered)
+    compare_item_ratio(notice, filtered, biz_sum)
+
+
+# ============================================================
 # 8. 메인 실행 함수
 # ============================================================
 def main():
@@ -557,6 +799,8 @@ def main():
     evaluate(filtered.loc[filtered.year.eq(2024)], "2024")
     draw_period_comparison()
     draw_yearly_line_chart(filtered)
+    compare_periods(filtered)
+    analyze_item_amount(notice, filtered)
     print("\nCSV 및 PNG 저장 위치:", OUT_DIR)
 
 
