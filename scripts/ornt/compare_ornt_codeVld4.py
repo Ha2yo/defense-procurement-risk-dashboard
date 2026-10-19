@@ -117,7 +117,7 @@ result = result[["ornt", "orntCode", "기관그룹", "분류근거", "전체품�
                  "군종류수", "codeVld4분포", "최다값", "최다비율"]]
 result = result.sort_values(["최다비율", "품목수"], ascending=[True, False])
 result.to_csv(OUT_FILE, index=False, encoding="utf-8-sig")
-
+  
 # 4) 요약 출력
 print(f"\n전체 기관 {len(result)}개 (codeVld4 없음 {no_vld4.sum()}개 포함)")
 print(f"codeVld4가 전부 비어 있는 기관 {len(empty_codes)}개: {', '.join(empty_codes)}")

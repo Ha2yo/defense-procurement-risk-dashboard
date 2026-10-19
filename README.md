@@ -18,30 +18,37 @@ python collect_data_contract.py
 python raw_to_clean.py
 
 
-## KPI (scripts/kpi)
-
-###  데이터 병합
+## 데이터 병합
 
 python scripts/preprocessing/merge_bid_data.py
-- 입찰공고·입찰결과 CLEAN 데이터 병합 (요구년도+기관코드+판단번호+공고번호+차수 기준), 유찰 여부 생성
+- 입찰공고·입찰결과 CLEAN 데이터 병합 (요구년도+기관코드+판단번호+공고번호+차수 기준)
+- 공고 단위로 집계, 연도는 공고일(pblancDate) 기준, 판단보류(유찰·낙찰 혼재) 공고 제외
 - 결과: data/kpi/bid_master_2021_2025.csv
 
-### 1. 공통 기준
-python scripts/kpi/kpi_common.py
-- 발주기관 분류 규칙, 기관 분류 기준표(org_group_map.csv) 생성
-- 위험도 흡수 규칙, 고위험 정렬 등 KPI·분석 공통 함수
+## 기관 분류 (scripts/ornt)
 
-### 2. 위험도 룩업 테이블
-python scripts/kpi/lookup_table_2021_2023.py
-- 2021~2023년 기관그룹×계약방법×사업구분 조합별 유찰률 (10건 미만 조합 흡수)
+### 1. 기관 목록
+python scripts/ornt/orntCode_unique.py
+- 공고 CLEAN 데이터에서 기관코드(orntCode) 기준 기관 목록(226개) 생성
 
-### 3. KPI 1
-python scripts/kpi/kpi1_2024.py
-- 고위험 공고(상위 20%) 사전 식별률 (2024년 검증)
+### 2. 기관그룹 분류 기준표
+python scripts/ornt/compare_ornt_codeVld4.py
+- 프로젝트 기관그룹 분류 기준 (기관명에 소속이 명시된 경우 기관명, 그 외 기관코드 + 개별 지정)
+- 품목명세서 codeVld4(소요군) 분포를 분류 근거로 함께 집계
+- 필요: data/raw/bid_item_20210101_20251231.csv (품목명세서)
+- 결과: data/analysis/ornt_code/orntCode_codeVld4_all.csv (기관그룹 열)
 
-### 4. KPI 2
-python scripts/kpi/kpi2_2024.py
-- 위험도 10분위별 실제 유찰률 단조성 (스피어만 상관계수)
+### (참고) 기관별 품목명세서 표본 수집
+python scripts/ornt/collect_ornt_item_sample.py
+- 기관별 공고 1건의 품목명세서 API 호출, 군 구분(miltDivs·codeVld4) 수집
+
+## KPI (scripts/kpi)
+
+python scripts/kpi/kpi_12_2024.py
+- 2021~2023년 기관그룹×계약방법×사업구분 조합별 유찰률 룩업 (10건 미만은 상위 조합 대체)
+- KPI 1: 고위험 공고(상위 20%) 사전 식별률 (2024년 검증, 동점 상한·하한·기대값 포함)
+- KPI 2: 위험도 10분위별 실제 유찰률 단조성 (스피어만 상관계수)
+- 결과: data/kpi/risk_lookup_2021_2023.csv, data/kpi/risk_stage_2024.csv
 
 ## 분석 (analysis)
 
@@ -104,4 +111,4 @@ data/clean
 
 .env 파일에 다음 항목 필요
 
-API_KEY_DATA_PORTAL=...
+API_KEY_DATA_PORTAL=... 
