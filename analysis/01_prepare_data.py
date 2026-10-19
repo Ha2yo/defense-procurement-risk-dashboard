@@ -1,17 +1,22 @@
 # %%
 """[분석계획 2단계] 분석용 데이터 준비
 
-분석 단위: 입찰 결과 품목 1건 = 1행
-  키 = 요구년도(demandYear) + 기관코드(orntCode) + 판단번호(dcsNo) + 공고번호(pblancNo) + 차수(pblancOdr) + 품목번호(iemNo)
-
-  - 공고 파일과 결과 파일을 요구년도+기관코드+판단번호+공고번호+차수로 병합한다.
-    (공고번호+차수만으로 병합하면 번호가 재사용된 공고에 다른 공고의 사업구분이 붙는다)
-  - 기관 그룹은 직접 계산하지 않고 공통 기준표(data/base/org_group_map.csv)를 읽어 붙인다.
-    (기준표는 scripts/kpi/kpi_common.py 실행 시 생성, 없으면 자동 생성)
+분석 단위: 입찰공고 1건 = 1행 (공고 단위)
+  - 입력은 KPI와 같은 병합 마스터(data/kpi/bid_master_2021_2025.csv)를 쓴다.
+    공고 단위 집계, 연도는 공고일(pblancDate) 기준, 판단보류 제외가 이미 반영되어 있다.
+  - 기관그룹은 기관그룹 분류 기준표(data/analysis/ornt_code/orntCode_codeVld4_all.csv)의
+    기관그룹 열을 기관코드(orntCode)로 붙인다.
+  - 2021~2023년, 수의계약 제외
   - 결과는 data/analysis/ 폴더에 저장한다 (data/ 폴더는 .gitignore로 업로드 제외).
+
+실행 순서
+  1) python scripts/preprocessing/merge_bid_data.py
+  2) python scripts/ornt/compare_ornt_codeVld4.py
+  3) python analysis/01_prepare_data.py   → 이 파일
+  4) python analysis/02_analysis.py
 """
-import sys
 from pathlib import Path
+
 import pandas as pd
 
 try:
@@ -19,70 +24,47 @@ try:
 except NameError:
     BASE_DIR = Path.cwd()
 
-RAW_DIR = BASE_DIR / 'data' / 'raw'
+MASTER_PATH = BASE_DIR / 'data' / 'kpi' / 'bid_master_2021_2025.csv'
+ORG_GROUP_PATH = BASE_DIR / 'data' / 'analysis' / 'ornt_code' / 'orntCode_codeVld4_all.csv'
 OUT_DIR = BASE_DIR / 'data' / 'analysis'
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-NOTICE_PATH = RAW_DIR / 'bid_notice_20210101_20251231.csv'
-RESULT_PATH = RAW_DIR / 'bid_result_20210101_20251231.csv'
 OUTPUT_PATH = OUT_DIR / 'analysis_master_2021_2023.csv'
 
-JOIN_KEY = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
-UNIT_KEY = JOIN_KEY + ['iemNo']
+KEY = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
 YEARS = (2021, 2023)
 
-# 순위확정 처리: 프로젝트 정의(유찰=1, 낙찰·순위확정=0)에 따라 포함한다. True로 바꾸면 제외
-EXCLUDE_RANK_CONFIRMED = False
+for path, script in [(MASTER_PATH, 'scripts/preprocessing/merge_bid_data.py'),
+                     (ORG_GROUP_PATH, 'scripts/ornt/compare_ornt_codeVld4.py')]:
+    if not path.exists():
+        raise SystemExit(f'❌ {path} 가 없습니다. {script} 를 먼저 실행하세요.')
 
+# 1. 마스터 + 기관그룹
+df = pd.read_csv(MASTER_PATH, encoding='utf-8-sig', dtype={'orntCode': str})
+org = pd.read_csv(ORG_GROUP_PATH, encoding='utf-8-sig', dtype={'orntCode': str})
+org = org[['orntCode', '기관그룹']].rename(columns={'기관그룹': 'org_group'})
+df = df.merge(org, on='orntCode', how='left')
+print(f'📂 마스터 {len(df):,}건 (공고 단위)')
 
-sys.path.insert(0, str(BASE_DIR / 'scripts' / 'kpi'))
-from kpi_common import attach_org_group  # noqa: E402
+missing = df.loc[df['org_group'].isna(), 'orntCode'].unique()
+if len(missing):
+    print(f'⚠️ 기관그룹 기준표에 없는 기관코드 {len(missing)}개: {list(missing)[:10]} → "미분류"')
+    df['org_group'] = df['org_group'].fillna('미분류')
 
-
-# 1. 원본 로드 (번호 앞자리 0이 사라지지 않도록 문자열로 읽음)
-print('📂 원본 로드 중...')
-notice = pd.read_csv(NOTICE_PATH, encoding='utf-8-sig', dtype=str)
-result = pd.read_csv(RESULT_PATH, encoding='utf-8-sig', dtype=str)
-notice.columns = notice.columns.str.strip()
-result.columns = result.columns.str.strip()
-print(f'  - 공고 {len(notice):,}행 / 결과 {len(result):,}행')
-
-# 2. 키 점검: 공고 파일은 JOIN_KEY로, 결과 파일은 UNIT_KEY로 1행씩이어야 함
-n_dup = notice.duplicated(JOIN_KEY).sum()
-r_dup = result.duplicated(UNIT_KEY).sum()
-print(f'  - 공고 파일 키 중복: {n_dup}행 / 결과 파일 단위 키 중복: {r_dup}행')
-if n_dup or r_dup:
-    raise SystemExit('❌ 키가 고유하지 않습니다. 병합 기준을 다시 확인하세요.')
-
-# 3. 병합 (공고 파일에서 사업구분만 가져옴)
-df = result.merge(notice[JOIN_KEY + ['busiDivs']], on=JOIN_KEY, how='left', validate='many_to_one')
-print(f'  - 병합 후 {len(df):,}행, 사업구분 매칭 실패 {df["busiDivs"].isna().sum():,}행')
-
-# 4. 파생 변수
-df['year'] = df['opengDate'].str[:4].astype(int)
-df = attach_org_group(df)  # 공통 기준표(org_group_map.csv)로 기관 그룹 부여
-df['fail_yn'] = (df['bidResult'] == '유찰').astype(int)
-
-# 5. 분석 대상 필터
+# 2. 분석 대상 필터
 before = len(df)
 df = df[df['year'].between(*YEARS)]
-print(f'\n🧹 필터: {YEARS[0]}~{YEARS[1]}년 개찰 → {len(df):,}행 (제외 {before - len(df):,})')
+print(f'🧹 필터: {YEARS[0]}~{YEARS[1]}년 공고 → {len(df):,}건 (제외 {before - len(df):,})')
 
 before = len(df)
-df = df[~df['cntrctMth'].str.contains('수의', na=False)]
-print(f'🧹 필터: 수의계약 제외 → {len(df):,}행 (제외 {before - len(df):,})')
+df = df[~df['cntrctMth'].astype(str).str.contains('수의', na=False)]
+print(f'🧹 필터: 수의계약 제외 → {len(df):,}건 (제외 {before - len(df):,})')
 
-if EXCLUDE_RANK_CONFIRMED:
-    before = len(df)
-    df = df[df['bidResult'].isin(['낙찰', '유찰'])]
-    print(f'🧹 필터: 순위확정 제외 → {len(df):,}행 (제외 {before - len(df):,})')
-
-# 6. 저장
-print('\n🏷️ 기관 그룹별 건수')
+# 3. 저장
+print('\n🏷️ 기관그룹별 건수')
 print(df['org_group'].value_counts().to_string())
 
-cols = UNIT_KEY + ['year', 'ornt', 'org_group', 'cntrctMth', 'busiDivs', 'bidResult', 'fail_yn']
-df = df[cols].sort_values(UNIT_KEY).reset_index(drop=True)
+OUT_DIR.mkdir(parents=True, exist_ok=True)
+cols = KEY + ['year', 'ornt', 'org_group', 'cntrctMth', 'busiDivs', 'bidResult', 'fail_yn']
+df = df[cols].sort_values(KEY).reset_index(drop=True)
 df.to_csv(OUTPUT_PATH, index=False, encoding='utf-8-sig')
 
 print(f'\n✨ 분석 대상 {len(df):,}건, 유찰 {df["fail_yn"].sum():,}건 (유찰률 {df["fail_yn"].mean():.2%})')
