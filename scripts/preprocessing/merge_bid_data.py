@@ -1,0 +1,75 @@
+# %%
+from pathlib import Path
+import pandas as pd
+
+
+# 1. 현재 실행 환경에 따른 기준 경로 설정
+try:
+    BASE_DIR = Path(__file__).resolve().parent
+except NameError:
+    BASE_DIR = Path.cwd()
+
+# 2. 디렉토리 구조 설정 및 자동 생성
+# - 원본 데이터용: data/raw/
+DATA_CLN_DIR = BASE_DIR / '../..' / 'data' / 'clean'
+DATA_CLN_DIR.mkdir(parents=True, exist_ok=True)
+
+# - KPI 결과물용: data-kpi/
+DATA_KPI_DIR = BASE_DIR / '../..' / 'data/kpi'
+DATA_KPI_DIR.mkdir(parents=True, exist_ok=True)
+
+notice_path = DATA_CLN_DIR / 'bid_notice_clean_20210101_20251231.csv'
+result_path = DATA_CLN_DIR / 'bid_result_clean_20210101_20251231.csv'
+output_path = DATA_KPI_DIR / 'bid_master_2021_2025.csv'  # 👈 data-kpi 폴더 안으로 저장 경로 변경
+
+print('📂 입찰공고 및 입찰결과 원본 파일 로드 중...')
+df_notice = pd.read_csv(notice_path, encoding='utf-8-sig')
+df_result = pd.read_csv(result_path, encoding='utf-8-sig')
+
+# 컬럼명 앞뒤 공백 제거
+df_notice.columns = df_notice.columns.str.strip()
+df_result.columns = df_result.columns.str.strip()
+
+print(f'  - 공고 원본 파일 건수: {len(df_notice):,}건')
+print(f'  - 입찰 결과 파일 건수: {len(df_result):,}건')
+
+# 3. 공통 키 설정 (요구년도 + 발주기관코드 + 판단번호 + 공고번호 + 공고차수)
+merge_keys = ['demandYear', 'orntCode', 'dcsNo', 'pblancNo', 'pblancOdr']
+
+# 4. 공고 원본에서 필요한 컬럼만 추출 후 중복 제거
+notice_subset = df_notice[merge_keys + ['busiDivs', 'pblancDate']].drop_duplicates(subset=merge_keys)
+
+print('\n🔗 공고번호 기준으로 데이터 병합(Merge) 진행 중...')
+df_master = pd.merge(df_result, notice_subset, on=merge_keys, how='inner')
+
+# 병합 결과가 공고 1건당 1행인지 확인 (여러 행이면 KPI의 "공고 수"가 부풀려짐)
+dup_rows = int(df_master.duplicated(subset=merge_keys, keep=False).sum())
+if dup_rows:
+    print(f'⚠️ 같은 공고번호-차수가 여러 행인 데이터: {dup_rows:,}행 (공고 1건당 1행이 아닙니다)')
+else:
+    print('✅ 공고번호-차수 기준 중복 없음 (공고 1건당 1행)')
+
+# 5. 유찰 여부(fail_yn) 라벨 생성
+df_master['fail_yn'] = df_master['bidResult'].astype(str).str.contains('유찰').astype(int)
+
+# 5-1. 판단보류 제외: 한 공고 안에 유찰 품목과 낙찰 품목이 섞인 공고 (데이터 항목정의서 기준)
+mixed = df_master.groupby(merge_keys)['fail_yn'].transform('nunique') > 1
+n_mixed = df_master.loc[mixed, merge_keys].drop_duplicates().shape[0]
+df_master = df_master[~mixed]
+print(f'⚖️ 판단보류(유찰·낙찰 혼재) 제외: {n_mixed:,}건 ({mixed.sum():,}행)')
+
+# 5-2. 공고 단위로 묶기: 공고 1건 = 1행 (남은 공고는 품목 결과가 모두 같음)
+before = len(df_master)
+df_master = df_master.drop_duplicates(subset=merge_keys, keep='first').reset_index(drop=True)
+print(f'📦 공고 단위로 묶음: {before:,}행 → {len(df_master):,}행')
+
+# 6. 연도 컬럼 추출: 공고일(pblancDate) 기준
+#    (위험도는 공고 시점에 매기므로 공고일 기준. 개찰일 opengDate 열은 그대로 남겨 둠)
+df_master['year'] = df_master['pblancDate'].astype(str).str[:4].astype(int)
+
+print(f'✨ 병합 및 정제 완료된 마스터 데이터 총 건수: {len(df_master):,}건')
+print(f"  - 사업유형이 성공적으로 장착된 건수: {df_master['busiDivs'].notnull().sum():,}건")
+
+# 7. 최종 통합 마스터 파일 저장 (data-kpi 폴더 내부)
+df_master.to_csv(output_path, index=False, encoding='utf-8-sig')
+print(f'🚀 통합 마스터 파일 저장 완료!\n📁 저장 경로: {output_path}')
