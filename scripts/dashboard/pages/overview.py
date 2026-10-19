@@ -2,7 +2,6 @@ import streamlit as st
 
 from scripts.dashboard.components import content_placeholder, metric_placeholder, source_note
 
-from scripts.dashboard.data_loader import load_notic
 def render():
     st.title("전체 유찰 현황")
     st.caption("전체 유찰률 및 연도·기관·사업유형·계약방법별 현황을 탐색합니다.")
