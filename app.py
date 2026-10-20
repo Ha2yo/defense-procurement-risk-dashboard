@@ -1,6 +1,6 @@
 import streamlit as st
 
-from scripts.dashboard.pages import overview, risk_prediction, failure_factors, delay_analysis
+from scripts.dashboard.pages import overview_01, risk_prediction_02, failure_factors_03, delay_effect_04
 
 
 # ============================================================
@@ -14,10 +14,10 @@ st.set_page_config(
 )
 
 PAGES = {
-    "전체 유찰 현황": overview.render,
-    "신규 공고 위험도 및 유사사례": risk_prediction.render,
-    "유찰 요인 분석": failure_factors.render,
-    "유찰 후 지연 영향": delay_analysis.render,
+    "전체 유찰 현황": overview_01.render,
+    "신규 공고 위험도 및 유사사례": risk_prediction_02.render,
+    "유찰 요인 분석": failure_factors_03.render,
+    "유찰 후 지연 영향": delay_effect_04.render,
 }
 
 
