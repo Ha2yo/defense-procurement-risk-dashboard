@@ -9,6 +9,7 @@ import streamlit as st
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "../..", "data", "dashboard")
+ORNT_DIR = os.path.join(BASE_DIR, "../..", "data", "analysis", "ornt_code")
 
 TABLE_FILES = {
     "procure_plan": "procure_plan.parquet",
@@ -63,3 +64,27 @@ def load_contract(columns=None):
 
 def load_item(columns=None):
     return load_data("bid_item", columns)
+
+
+# ============================================================
+# 3. 참조 테이블
+# ============================================================
+
+ORG_GROUP_FILE = "orntCode_codeVld4_all.csv"
+
+
+@st.cache_data(show_spinner=False)
+def _read_csv(path, modified_time):
+    return pd.read_csv(path, dtype=str, encoding="utf-8-sig")
+
+
+def load_org_group():
+    """발주기관코드(orntCode) → 기관그룹 매핑표를 읽습니다."""
+    path = os.path.join(ORNT_DIR, ORG_GROUP_FILE)
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"기관그룹 매핑 파일이 없습니다: {path}\n"
+            f"{ORG_GROUP_FILE}을 data/dashboard 폴더에 넣어 주세요."
+        )
+    return _read_csv(path, os.path.getmtime(path))[["orntCode", "기관그룹"]]
