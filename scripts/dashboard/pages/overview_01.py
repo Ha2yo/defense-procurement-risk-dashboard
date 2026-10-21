@@ -1,4 +1,4 @@
-"""전체 유찰 현황: 유찰 규모 → 집중 영역 → 후속공고·추가 지연."""
+"""전체 유찰 현황: 유찰 규모 → 집중 영역."""
 import os
 
 import pandas as pd
@@ -9,7 +9,6 @@ from scripts.dashboard.components import source_note
 from scripts.dashboard.data_loader import load_notice, load_result
 from analysis.statistical.a5_followup_analysis_FINAL import (
     prepare as prepare_bid_result,
-    build_followup as find_followup_notices,
 )
 
 
@@ -51,13 +50,6 @@ def prepare_overview_data():
     data["confirmed"] = data["result_status"].isin(["유찰", "낙찰", "순위확정"])
     data["failed"] = data["result_status"].eq("유찰")
     return data
-
-
-@st.cache_data(show_spinner="후속공고를 연결하는 중입니다. 최초 실행에는 시간이 걸릴 수 있습니다...")
-def prepare_followup_data():
-    notice = prepare_overview_data()
-    detail, _, _, _, _ = find_followup_notices(notice)
-    return detail
 
 
 def apply_filters(df, years, org, business, method):
@@ -152,41 +144,3 @@ def render():
             )
             st.dataframe(summary, hide_index=True, use_container_width=True,
                          column_config={"유찰률(%)": st.column_config.NumberColumn(format="%.2f%%")})
-            
-
-    # --------------------------------------------------------
-    # 03. 유찰 후속공고 및 추가 소요일
-    # --------------------------------------------------------
-    st.subheader("03. 후속공고 및 추가 지연")
-    st.caption("유찰 이후 후속공고가 확인되는지, 결과확정 후속 재공고까지 얼마나 걸리는지 확인합니다.")
-    try:
-        followup = prepare_followup_data()
-        # A~C와 동일한 원공고 조건으로 필터: 후속공고 자체를 미리 필터하면 연결이 누락됨
-        followup = apply_filters(followup, years, org, business, method)
-    except (ValueError, KeyError, FileNotFoundError) as exc:
-        st.error(f"후속공고 분석을 계산하지 못했습니다: {exc}")
-        return
-
-    tracked = len(followup)
-    found = int(followup["followup_found"].sum())
-    days = pd.to_numeric(followup.loc[followup["duration_valid"], "delay_days"], errors="coerce").dropna()
-
-    d1, d2, d3, d4 = st.columns(4)
-    d1.metric("후속공고 확인 건수", f"{found:,}건")
-    d2.metric("후속공고 확인 비율", metric_rate(found, tracked))
-    d3.metric("평균 추가 소요일", f"{days.mean():.2f}일" if len(days) else "—")
-    d4.metric("중앙 추가 소요일", f"{days.median():.1f}일" if len(days) else "—")
-    st.caption(f"후속공고 추적 대상 유찰 원공고 {tracked:,}건 · 공식 소요일 계산 가능 {len(days):,}건. 후속공고 미확인은 미재공고 확정을 뜻하지 않습니다.")
-
-    left, right = st.columns(2)
-    with left:
-        status = pd.DataFrame({"상태": ["후속공고 확인", "후속공고 미확인"], "건수": [found, tracked - found]})
-        st.plotly_chart(px.bar(status, x="상태", y="건수", title="후속공고 확인 현황"), use_container_width=True)
-    with right:
-        if len(days):
-            fig = px.histogram(pd.DataFrame({"추가 소요일": days}), x="추가 소요일", nbins=30,
-                               title="결과확정 후속 재공고 추가 소요일 분포")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("추가 소요일을 계산할 사례가 없습니다.")
-    st.caption("추가 소요일 = 후속 재공고 개찰일 − 원공고 개찰일. 관측 종료일은 2025-12-31입니다.")
