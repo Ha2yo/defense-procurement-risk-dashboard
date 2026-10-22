@@ -1,0 +1,21 @@
+{
+  "new_model_name": "순차보정모델-1 (SC-1)",
+  "previous_name": "B-2 공고기간 통일판",
+  "baseline_source": "kpi_12_2024(1).py",
+  "baseline_patch": "one training filter location; merge command path text updated",
+  "baseline_eval_year": 2024,
+  "training_n": 20085,
+  "evaluation_n": 6490,
+  "captured_failures": 542,
+  "kpi1_pct": 35.98937583001328,
+  "kpi2_spearman": 0.9272727272727272,
+  "training_availability_interpretation": "2023-12-31 opengDate proxy, interpreting prior-information-only principle; not a literal date rule in document",
+  "old_no_cutoff_training_n": 20121,
+  "old_no_cutoff_captured_failures": 542,
+  "old_no_cutoff_kpi2_spearman": 0.9151515151515152,
+  "same_risk_and_rank_as_verified_reference": true,
+  "baseline_input_file": "data/kpi/bid_master_2021_2025.csv",
+  "other_validation_script": "kpi_2024_validation.py reads CLEAN directly; not a consumer of this master",
+  "original_source_sha256": "eb2a0bf918cd201d0ac60c11ea922da2ecb8a644acca51b7ad02549c8f4e58be",
+  "updated_source_sha256": "c96bd3d7985e0162056c4ab489a6de35f17f1ccf39a17b1b5e6942ff33e206f9"
+}

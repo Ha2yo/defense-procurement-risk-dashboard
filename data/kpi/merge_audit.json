@@ -1,0 +1,21 @@
+{
+  "schema": "rank_only_excluded_v1",
+  "input_notice_rows": 61142,
+  "input_result_rows": 38114,
+  "unique_result_keys": 38025,
+  "unmatched_result_keys": 0,
+  "master_rows": 36184,
+  "master_failed": 9845,
+  "state_counts_all_notices": {
+    "낙찰": 26339,
+    "결과직접연결없음": 23117,
+    "유찰": 9845,
+    "순위확정만": 1839,
+    "판단보류": 2
+  },
+  "private_contracts": "preserved in master, excluded by both model scripts",
+  "input_sha256": {
+    "bid_notice_clean_20210101_20251231.csv": "3284ddb3dda389b594783de049896efc5bea2216445c0ef29c3b20c93baa41e8",
+    "bid_result_clean_20210101_20251231.csv": "71b0eab2fc708f567cfacfa35abd3c19784b3668a908c7fa937ca44899e72e7b"
+  }
+}

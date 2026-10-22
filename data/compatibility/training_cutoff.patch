@@ -1,0 +1,30 @@
+--- scripts/kpi/kpi_12_2024.py
++++ scripts/kpi/kpi_12_2024.py
+@@ -2,7 +2,7 @@
+ """2024년 KPI 예비 검증 (위험도 룩업 + KPI 1 + KPI 2를 한 번에).
+ 
+ 실행 순서
+-  1) python scripts/preprocessing/merge_bid_data.py   → data/kpi/bid_master_2021_2025.csv
++  1) python scripts/preprocessing/merge_bid_data.py   → data/kpi/bid_master_2021_2025.csv
+   2) python scripts/ornt/compare_ornt_codeVld4.py     → data/analysis/ornt_code/orntCode_codeVld4_all.csv (기관그룹)
+   3) python scripts/kpi/kpi_12_2024.py                → 이 파일
+ 
+@@ -70,7 +70,7 @@
+ # ---------------------------------------------------------------------------
+ # 1. 데이터 준비
+ # ---------------------------------------------------------------------------
+-for path, script in [(MASTER_PATH, 'scripts/preprocessing/merge_bid_data.py'),
++for path, script in [(MASTER_PATH, 'scripts/preprocessing/merge_big_data.py'),
+                      (ORG_GROUP_PATH, 'scripts/ornt/compare_ornt_codeVld4.py')]:
+     if not path.exists():
+         raise SystemExit(f'❌ {path} 가 없습니다. {script} 를 먼저 실행하세요.')
+@@ -89,7 +89,8 @@
+ df['mthd_group'] = df['cntrctMth']
+ df = df[~df['cntrctMth'].astype(str).str.contains('수의', na=False)]
+ 
+-train = df[df['year'].between(*TRAIN_YEARS)].copy()
++result_available_date = pd.to_datetime(df['result_last_date'].astype(str), format='%Y%m%d', errors='coerce')
++train = df[df['year'].between(*TRAIN_YEARS) & result_available_date.le(pd.Timestamp('2023-12-31'))].copy()
+ test = df[(df['year'] == EVAL_YEAR) & df['fail_yn'].notna()].copy()
+ test['notice_key'] = test['pblancNo'].astype(str) + '-' + test['pblancOdr'].astype(str)
+ 
