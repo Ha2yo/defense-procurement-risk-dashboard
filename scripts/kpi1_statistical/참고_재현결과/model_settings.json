@@ -1,0 +1,44 @@
+{
+  "baseline": "org_group × cntrctMth × busiDivs",
+  "model": "agency_notice_amount",
+  "hierarchy_tiers": [
+    [
+      "orntCode"
+    ],
+    [
+      "orntCode",
+      "pblancSe"
+    ],
+    [
+      "orntCode",
+      "pblancSe",
+      "amount_band"
+    ]
+  ],
+  "hierarchy_min_group_n": 5,
+  "hierarchy_smoothing": 10,
+  "tie_rule": "기간률_후_금액률",
+  "tie_candidates": {
+    "기존_공고키": [],
+    "과거_세부금액률": [
+      "fine_rate"
+    ],
+    "과거_제출기간률": [
+      "period_rate"
+    ],
+    "금액률_후_기간률": [
+      "fine_rate",
+      "period_rate"
+    ],
+    "기간률_후_금액률": [
+      "period_rate",
+      "fine_rate"
+    ]
+  },
+  "tiebreak_group_min_n": 10,
+  "tiebreak_smoothing": 20,
+  "rule_selected_by": "2023 KPI1 → KPI2; 2024/2025 rules frozen",
+  "data_source": "/mnt/data",
+  "caveat": "opengDate는 결과 확정일이 아닌 개찰일 대용",
+  "scope": "낙찰/유찰 확정, 수의계약 제외, 순위확정/미확인 제외"
+}
