@@ -90,7 +90,7 @@ def amount_bins(amount):
 
 
 def prepare_base(notice, result, org_map):
-    """결과확정 공고(판단보류·결과 미확인 제외)에 분석 변수를 붙입니다."""
+    """결과확정 공고(판단보류·결과 미확인·수의계약 제외)에 분석 변수를 붙입니다."""
     fail = build_notice_fail(result)
     df = notice.merge(fail, left_on="noticeKey", right_index=True, how="inner")
     df = df[df["fail"].notna()].copy()
@@ -148,12 +148,19 @@ def filter_period(df, years):
     return df[df["year"].between(start, end)]
 
 
-def factor_frame(df, factor, exclude_private=False):
+PRIVATE_CONTRACT = "수의계약"
+
+
+def exclude_private_contracts(df):
+    """팀 기준: 수의계약 공고를 분석 대상에서 제외합니다. (제외 후 데이터, 제외 건수)"""
+    mask = df["cntrctMth"].eq(PRIVATE_CONTRACT).fillna(False)
+    return df[~mask], int(mask.sum())
+
+
+def factor_frame(df, factor):
     """선택 변수의 범주값과 fail만 남기고, 제외 건수를 함께 돌려줍니다."""
     col = FACTOR_COLUMNS[factor]
     data = df[[col, "fail"]].rename(columns={col: "category"})
-    if exclude_private and factor == "계약·경쟁방식":
-        data = data[data["category"] != "수의계약"]
     excluded = int(data["category"].isna().sum())
     data = data.dropna(subset=["category"]).copy()
     data["category"] = data["category"].astype(str)
@@ -302,7 +309,7 @@ def crosstab_view(summary):
     ]
 
 
-def interpretation(factor, period, summary, stats, overall_rate, exclude_private):
+def interpretation(factor, period, summary, stats, overall_rate):
     lines = []
     if stats["p_value"] < ALPHA:
         lines.append(
@@ -330,11 +337,6 @@ def interpretation(factor, period, summary, stats, overall_rate, exclude_private
             "- 표본이 커서 작은 차이도 유의하게 나올 수 있습니다. "
             "p-value보다 Cramér's V와 범주별 유찰률 차이를 함께 보고 판단하세요."
         )
-    if factor == "계약·경쟁방식" and not exclude_private and "수의계약" in set(summary["범주"]):
-        lines.append(
-            "- 수의계약은 유찰률이 매우 높아 연관성 크기를 크게 끌어올립니다. "
-            "'수의계약 제외'를 켜서 경쟁 계약끼리의 차이도 확인하세요."
-        )
     return "\n".join(lines)
 
 
@@ -361,9 +363,6 @@ def render():
         )
     period = period_label(years)
 
-    exclude_private = False
-    if factor == "계약·경쟁방식":
-        exclude_private = st.checkbox("수의계약 제외", value=False)
 
     with st.spinner("유찰 요인 분석 결과를 불러오는 중입니다..."):
         try:
@@ -373,7 +372,9 @@ def render():
             return
 
         period_df = filter_period(base, years)
-        data, excluded = factor_frame(period_df, factor, exclude_private)
+        # 팀 기준: 수의계약은 모든 분석에서 제외
+        period_df, private_excluded = exclude_private_contracts(period_df)
+        data, excluded = factor_frame(period_df, factor)
         if data.empty:
             st.warning("선택한 조건에 해당하는 공고가 없습니다.")
             return
@@ -391,7 +392,9 @@ def render():
         help=strength_label(stats["cramers_v"]) if stats else None,
     )
 
-    notes = [f"유찰률 = 유찰 공고 수 ÷ 결과확정 공고 수 (판단보류·결과 미확인 제외) · 전체 {overall_rate:.2f}%"]
+    notes = [f"유찰률 = 유찰 공고 수 ÷ 결과확정 공고 수 (판단보류·결과 미확인·수의계약 제외) · 전체 {overall_rate:.2f}%"]
+    if private_excluded:
+        notes.append(f"수의계약 {private_excluded:,}건 제외")
     if excluded:
         notes.append(f"{EXCLUDE_REASON[factor]} {excluded:,}건 제외")
     if years[0] == YEAR_MIN:
@@ -424,7 +427,7 @@ def render():
         if stats is None:
             st.warning("범주가 1개뿐이라 카이제곱 검정을 할 수 없습니다.")
         else:
-            st.markdown(interpretation(factor, period, summary, stats, overall_rate, exclude_private))
+            st.markdown(interpretation(factor, period, summary, stats, overall_rate))
             st.caption(f"χ² = {stats['chi2']:,.2f}, 자유도 = {stats['dof']}, 최소 기대빈도 = {stats['min_expected']:.1f}")
             if stats["low_expected_ratio"] > 0:
                 st.warning(
