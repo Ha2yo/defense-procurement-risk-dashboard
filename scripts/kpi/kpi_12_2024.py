@@ -18,11 +18,18 @@
 출력 (data/kpi/)
   - risk_lookup_2021_2023.csv : 단계별 과거 유찰률 표
   - risk_stage_2024.csv       : 상위 조합으로 대체된(2~4단계) 2024년 공고 목록
+  - kpi2_decile_2024.csv      : 10분위별 건수·실제 유찰률·위험도 범위·평균 예측 위험도
+  - kpi2_decile_2024.png      : 10분위 실제 유찰률 vs 평균 예측 위험도 선그래프
+  - kpi2_decile_combo_2024.csv: 분위 × 적용 조합별 건수·예측 위험도·실제 유찰률 (꺾임 진단용)
 """
 from pathlib import Path
 
 import pandas as pd
 from scipy.stats import spearmanr
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
 
 try:
     PROJECT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -34,6 +41,9 @@ MASTER_PATH = DATA_KPI_DIR / 'bid_master_2021_2025.csv'
 ORG_GROUP_PATH = PROJECT_DIR / 'data' / 'analysis' / 'ornt_code' / 'orntCode_codeVld4_all.csv'
 LOOKUP_PATH = DATA_KPI_DIR / 'risk_lookup_2021_2023.csv'
 STAGE_PATH = DATA_KPI_DIR / 'risk_stage_2024.csv'
+DECILE_PATH = DATA_KPI_DIR / 'kpi2_decile_2024.csv'
+DECILE_FIG_PATH = DATA_KPI_DIR / 'kpi2_decile_2024.png'
+DECILE_COMBO_PATH = DATA_KPI_DIR / 'kpi2_decile_combo_2024.csv'
 
 TRAIN_YEARS = (2021, 2023)
 EVAL_YEAR = 2024
@@ -207,8 +217,10 @@ decile = asc.groupby('decile', observed=True).agg(
     actual_fail_count=('fail_yn', 'sum'),
     risk_min=('fail_rate', 'min'),
     risk_max=('fail_rate', 'max'),
+    risk_mean=('fail_rate', 'mean'),          # 평균 예측 위험도
 ).reset_index()
 decile['actual_fail_rate(%)'] = (decile['actual_fail_count'] / decile['total_count'] * 100).round(2)
+decile['pred_risk_mean(%)'] = (decile['risk_mean'] * 100).round(2)
 rho, p_value = spearmanr(decile['decile'].astype(int), decile['actual_fail_rate(%)'])
 
 print('\n' + '=' * 70)
@@ -221,3 +233,78 @@ print(f'  🎯 [스피어만 Rho]: {rho:.4f}  (목표 {KPI2_TARGET} 이상, p-va
       f'{"✅" if rho >= KPI2_TARGET else "❌"}')
 print('=' * 70)
 print(f'📁 룩업 표 저장: {LOOKUP_PATH}')
+
+
+# ---------------------------------------------------------------------------
+# 6. KPI 2 진단: 분위 표·선그래프·꺾임 구간 조합·동점 분포
+# ---------------------------------------------------------------------------
+decile.drop(columns='risk_mean').to_csv(DECILE_PATH, index=False, encoding='utf-8-sig')
+
+# 꺾임 등급: 실제 유찰률이 앞 등급보다 낮아지는 등급
+rates = decile['actual_fail_rate(%)'].tolist()
+dips = [i + 1 for i in range(1, 10) if rates[i] < rates[i - 1]]
+
+# 분위 × 적용 조합
+asc['combo'] = asc['org_group'] + ' / ' + asc['mthd_group'] + ' / ' + asc['busiDivs']
+combo_tbl = (asc.groupby(['decile', 'combo'], observed=True)
+             .agg(건수=('fail_yn', 'size'), 실제유찰=('fail_yn', 'sum'), 예측위험도=('fail_rate', 'mean'))
+             .reset_index())
+combo_tbl['예측위험도(%)'] = (combo_tbl.pop('예측위험도') * 100).round(2)
+combo_tbl['실제유찰률(%)'] = (combo_tbl['실제유찰'] / combo_tbl['건수'] * 100).round(2)
+combo_tbl['차이(%p)'] = (combo_tbl['실제유찰률(%)'] - combo_tbl['예측위험도(%)']).round(2)
+combo_tbl = combo_tbl.sort_values(['decile', '건수'], ascending=[True, False])
+combo_tbl.to_csv(DECILE_COMBO_PATH, index=False, encoding='utf-8-sig')
+
+print('\n' + '=' * 70)
+print('🔎 [KPI 2 진단] 실제 유찰률이 앞 등급보다 낮아지는 구간')
+print('=' * 70)
+for d in dips:
+    print(f'  ▶ {d - 1}등급 {rates[d - 2]:.2f}% → {d}등급 {rates[d - 1]:.2f}%')
+    for dd in (d - 1, d):
+        top3 = combo_tbl[combo_tbl['decile'] == dd].head(3)
+        for _, r in top3.iterrows():
+            print(f'     {dd}등급 | {r["combo"]} | {r["건수"]:,}건 | '
+                  f'예측 {r["예측위험도(%)"]:.1f}% → 실제 {r["실제유찰률(%)"]:.1f}%')
+
+# 동점: 2개 이상 등급에 걸친 위험도 값
+span = asc.groupby('fail_rate')['decile'].nunique()
+print('\n🔎 [KPI 2 진단] 여러 등급에 걸친 같은 위험도')
+for v in span[span > 1].index:
+    sub = asc[asc['fail_rate'] == v].groupby('decile', observed=True)['fail_yn'].agg(['size', 'mean'])
+    parts = ', '.join(f'{int(d)}등급 {int(r["size"]):,}건({r["mean"] * 100:.1f}%)' for d, r in sub.iterrows())
+    print(f'  • 위험도 {v:.4f}: {parts}')
+
+# 선그래프: 실제 유찰률 vs 평균 예측 위험도
+_installed = {f.name for f in font_manager.fontManager.ttflist}
+for _font in ['Malgun Gothic', 'Noto Sans CJK KR', 'NanumGothic', 'AppleGothic']:
+    if _font in _installed:
+        plt.rcParams['font.family'] = _font
+        break
+plt.rcParams['axes.unicode_minus'] = False
+
+x = decile['decile'].astype(int)
+fig, ax = plt.subplots(figsize=(8.5, 4.5), dpi=150)
+ax.plot(x, decile['actual_fail_rate(%)'], marker='o', color='#2a78d6', linewidth=2, label='실제 유찰률')
+ax.plot(x, decile['pred_risk_mean(%)'], marker='s', color='#52514e', linewidth=1.5,
+        linestyle='--', label='평균 예측 위험도')
+for d in dips:
+    ax.scatter(d, rates[d - 1], s=140, facecolors='none', edgecolors='#eb6834', linewidths=2, zorder=3)
+for xi, yi in zip(x, decile['actual_fail_rate(%)']):
+    ax.annotate(f'{yi:.1f}', (xi, yi), textcoords='offset points', xytext=(0, 8),
+                ha='center', fontsize=8, color='#0b0b0b')
+ax.set_xticks(range(1, 11))
+ax.set_xlabel('위험도 등급 (1 = 가장 낮음)')
+ax.set_ylabel('%')
+ax.set_title(f'{EVAL_YEAR}년 위험도 10분위별 실제 유찰률 (Spearman ρ = {rho:.4f})', loc='left', fontsize=12)
+ax.grid(axis='y', color='#e4e3df', linewidth=0.8)
+for side in ['top', 'right']:
+    ax.spines[side].set_visible(False)
+ax.legend(frameon=False, loc='upper left')
+fig.text(0.01, 0.01, '주황 원 = 실제 유찰률이 앞 등급보다 낮아진 등급', fontsize=8, color='#52514e')
+fig.tight_layout(rect=(0, 0.03, 1, 1))
+fig.savefig(DECILE_FIG_PATH)
+plt.close(fig)
+
+print(f'\n📁 분위 표: {DECILE_PATH}')
+print(f'📁 분위 그래프: {DECILE_FIG_PATH}')
+print(f'📁 분위×조합 표: {DECILE_COMBO_PATH}')

@@ -3,8 +3,11 @@
 
 입력: data/analysis/analysis_master_2021_2023.csv  (01_prepare_data.py 결과)
 출력: data/analysis/results/
-  - rate_<변수>.csv          조건별 건수·유찰 건수·유찰률·조정 표준화 잔차
-  - chi2_summary.csv         검정 결과표 (χ², 자유도, p값, Cramér's V, 기대빈도<5 비율)
+  - rate_<변수>.csv          조건별 건수·유찰·비유찰 건수·유찰률(95% 신뢰구간)·조정 표준화 잔차
+  - chi2_summary.csv         검정 결과표 (분석건수, χ², 자유도, p값, Holm 보정 p값, Cramér's V,
+                             유찰률 차이(%p), 기대빈도<5 비율)
+                             Holm 보정은 기관그룹·계약방법·사업구분 3개 검정에 적용하고,
+                             조합 검정은 위험도 참고용이라 보정에서 제외한다.
   - high_risk_categories.csv 잔차 기준 유찰이 유의하게 많은 범주/조합
   - fig_<변수>.png           유찰률 막대그래프 (전체 유찰률 기준선, 막대별 n)
   - analysis_results.xlsx    위 표들을 시트별로 묶은 파일
@@ -83,11 +86,36 @@ VARIABLES = [
     ('busiDivs', '사업구분'),
     ('combo_test', '기관×계약방법×사업구분 조합'),
 ]
+HOLM_VARS = ['org_group', 'mthd', 'busiDivs']   # 주 검정 (Holm 보정 대상)
+MERGED_LABEL = '소표본 조합(병합)'
 
 
 # ---------------------------------------------------------------------------
 # 2. 기술통계 + 카이제곱 + 조정 표준화 잔차
 # ---------------------------------------------------------------------------
+def wilson_ci(k, n, z=1.96):
+    """유찰률의 95% Wilson 신뢰구간(%). 건수가 적은 범주일수록 구간이 넓다."""
+    k = np.asarray(k, dtype=float)
+    n = np.asarray(n, dtype=float)
+    p = k / n
+    denom = 1 + z ** 2 / n
+    center = (p + z ** 2 / (2 * n)) / denom
+    half = z * np.sqrt(p * (1 - p) / n + z ** 2 / (4 * n ** 2)) / denom
+    return ((center - half) * 100).round(2), ((center + half) * 100).round(2)
+
+
+def holm(pvals):
+    """Holm 보정 p값 (statsmodels의 multipletests(method='holm')과 같은 결과)."""
+    pvals = np.asarray(pvals, dtype=float)
+    m = len(pvals)
+    adj = np.empty(m)
+    running = 0.0
+    for rank, i in enumerate(np.argsort(pvals)):
+        running = max(running, (m - rank) * pvals[i])
+        adj[i] = min(running, 1.0)
+    return adj
+
+
 def analyze(col):
     table = pd.crosstab(df[col], df['fail_yn']).reindex(columns=[0, 1], fill_value=0)
     chi2, p_val, dof, expected = chi2_contingency(table)
@@ -101,11 +129,15 @@ def analyze(col):
         exp_fail * (1 - row_tot / n) * (1 - col_tot[1] / n)
     )
 
+    ci_low, ci_high = wilson_ci(table[1].values, row_tot.values)
     rate = pd.DataFrame({
         '범주': table.index,
         '건수': row_tot.values,
         '유찰건수': table[1].values,
+        '비유찰건수': table[0].values,
         '유찰률(%)': (table[1] / row_tot * 100).round(2).values,
+        '95% CI 하한(%)': ci_low,
+        '95% CI 상한(%)': ci_high,
         '기대유찰건수': exp_fail.round(1),
         '조정표준화잔차': adj_resid.round(2).values,
     })
@@ -115,14 +147,19 @@ def analyze(col):
     )
     rate = rate.sort_values('유찰률(%)', ascending=False).reset_index(drop=True)
 
+    # 유찰률 차이(%p): 가장 높은 범주 - 가장 낮은 범주 (병합된 소표본 조합은 제외)
+    real = rate[rate['범주'] != MERGED_LABEL]['유찰률(%)']
+    gap = real.max() - real.min()
+
     summary = {
+        '분석건수': int(n),
         'χ²': round(chi2, 2),
         '자유도': dof,
         'p값': p_val,
         "Cramér's V": round(cramers_v, 4),
+        '유찰률 차이(%p)': round(gap, 2),
         '범주 수': table.shape[0],
         '기대빈도<5 칸 비율(%)': round((expected < 5).mean() * 100, 1),
-        '결론': ('H0 기각' if p_val < ALPHA else 'H0 채택'),
         '관련 강도': ('무시할 수준(<0.1)' if cramers_v < 0.1 else
                   '약함(0.1~0.3)' if cramers_v < 0.3 else
                   '중간(0.3~0.5)' if cramers_v < 0.5 else '강함(≥0.5)'),
@@ -135,22 +172,40 @@ summaries = []
 for col, label in VARIABLES:
     rate, summary = analyze(col)
     results[col] = rate
-    summaries.append({'변수': label, **summary})
+    summaries.append({'변수': label, '_col': col, **summary})
     rate.to_csv(OUT_DIR / f'rate_{col}.csv', index=False, encoding='utf-8-sig')
 
+# Holm 보정: 주 검정 3개(기관그룹·계약방법·사업구분)에만 적용, 결론은 보정 p값 기준
+main_idx = [i for i, s in enumerate(summaries) if s['_col'] in HOLM_VARS]
+adj = holm([summaries[i]['p값'] for i in main_idx])
+for i, a in zip(main_idx, adj):
+    summaries[i]['보정 p값(Holm)'] = a
+    summaries[i]['결론'] = 'H0 기각' if a < ALPHA else 'H0 채택'
+for s in summaries:
+    if s['_col'] not in HOLM_VARS:
+        s['보정 p값(Holm)'] = None
+        s['결론'] = ('H0 기각' if s['p값'] < ALPHA else 'H0 채택') + ' (참고, 보정 제외)'
+
+for (col, label), s in zip(VARIABLES, summaries):
     print('=' * 72)
     print(f'📊 {label}')
     print('=' * 72)
-    print(rate.to_string(index=False))
-    v = summary["Cramér's V"]
-    print(f"  χ²={summary['χ²']:,}  df={summary['자유도']}  p={summary['p값']:.3e}  "
-          f"V={v}  → {summary['결론']}, {summary['관련 강도']}")
-    if summary['기대빈도<5 칸 비율(%)'] > 20:
+    print(results[col].to_string(index=False))
+    adj_txt = f"{s['보정 p값(Holm)']:.3e}" if s['보정 p값(Holm)'] is not None else '보정 제외'
+    v = s["Cramér's V"]
+    print(f"  n={s['분석건수']:,}  χ²={s['χ²']:,}  df={s['자유도']}  p={s['p값']:.3e}  "
+          f"Holm p={adj_txt}  V={v}  차이={s['유찰률 차이(%p)']}%p  "
+          f"→ {s['결론']}, {s['관련 강도']}")
+    if s['기대빈도<5 칸 비율(%)'] > 20:
         print('  ⚠️ 기대빈도 5 미만 칸이 20%를 넘습니다. 범주 병합을 검토하세요.')
     print()
 
-chi2_summary = pd.DataFrame(summaries)
+SUMMARY_COLS = ['변수', '분석건수', 'χ²', '자유도', 'p값', '보정 p값(Holm)', "Cramér's V",
+                '유찰률 차이(%p)', '범주 수', '기대빈도<5 칸 비율(%)', '결론', '관련 강도']
+chi2_summary = pd.DataFrame(summaries)[SUMMARY_COLS]
 chi2_summary['p값'] = chi2_summary['p값'].map(lambda v: f'{v:.3e}')
+chi2_summary['보정 p값(Holm)'] = chi2_summary['보정 p값(Holm)'].map(
+    lambda v: f'{v:.3e}' if pd.notna(v) else '참고(보정 제외)')
 chi2_summary.to_csv(OUT_DIR / 'chi2_summary.csv', index=False, encoding='utf-8-sig')
 
 # 잔차 기준 고위험 범주/조합
@@ -173,7 +228,10 @@ for col, label in VARIABLES:
     r['χ²'] = s['χ²']
     r['자유도'] = s['자유도']
     r['p값'] = f"{s['p값']:.3e}"
+    r['보정 p값(Holm)'] = (f"{s['보정 p값(Holm)']:.3e}" if s['보정 p값(Holm)'] is not None
+                         else '참고(보정 제외)')
     r["Cramér's V"] = s["Cramér's V"]
+    r['유찰률 차이(%p)'] = s['유찰률 차이(%p)']
     r['결론'] = s['결론']
     r['관련 강도'] = s['관련 강도']
     all_rows.append(r)
