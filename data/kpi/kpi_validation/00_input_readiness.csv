@@ -1,0 +1,7 @@
+﻿자료,파일경로,행수,컬럼수,필수컬럼누락,상태
+notice,C:\workspace\defense-procurement-risk-dashboard\data\clean\bid_notice_clean_20210101_20251231.csv,61142,26,없음,확인
+result,C:\workspace\defense-procurement-risk-dashboard\data\clean\bid_result_clean_20210101_20251231.csv,38114,18,없음,확인
+plan,C:\workspace\defense-procurement-risk-dashboard\data\clean\procure_plan_clean_20210101_20251231.csv,225599,15,없음,확인
+contract,C:\workspace\defense-procurement-risk-dashboard\data\clean\contract_info_clean_20210101_20251231.csv,181276,14,없음,확인
+items,C:\workspace\defense-procurement-risk-dashboard\data\clean\bid_item_clean_20210101_20251231.csv,415963,30,없음,확인
+mapping,C:\workspace\defense-procurement-risk-dashboard\data\clean\orntCode_codeVld4_all.csv,226,10,없음,확인
