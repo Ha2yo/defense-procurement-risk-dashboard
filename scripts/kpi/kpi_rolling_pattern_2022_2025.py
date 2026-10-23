@@ -1,373 +1,292 @@
 # -*- coding: utf-8 -*-
-"""군수품 조달: 과거 누적 학습 → 다음 연도 검증(2022~2025)과 모델 일관성 평가.
+"""공식 금액 5분위 4변수: 반기별 안정성 검증 + 2024 예비 + 2025 별도 평가.
 
-[배치] scripts/kpi/kpi_rolling_pattern_2022_2025.py
-       scripts/kpi/kpi_2024_validation.py (기존 코드, 수정/실행하지 않음)
-[실행] python scripts/kpi/kpi_rolling_pattern_2022_2025.py
-       python scripts/kpi/kpi_rolling_pattern_2022_2025.py --project-root "C:/workspace/defense-procurement-risk-dashboard"
-[입력] data/clean 입찰공고/입찰결과 CLEAN (읽기 전용)
-[출력] data/kpi/rolling_validation/ 아래 핵심 4개 파일
-       01_yearly_model_results.csv   4개 검증연도 × 4개 조합 (16행)
-       02_pattern_summary.csv        조합별 4개년 성능·안정성 요약 (4행)
-       03_pattern_report.md          보고서용 연도별 비교·해석
-       04_recall_trend.png            3~6변수 연도별 Recall@20% 선그래프
-       execution.log                 실행 단계 및 오류
+필수 파일: 같은 폴더의 kpi_2024_validation.py (최신 공식 4변수 버전)
+실행: python scripts/kpi/kpi_rolling_pattern_2022_2025.py
 
-※ 기존 kpi_2024_validation.py의 결과 판정·기관 분류·위험도 백오프·KPI1 계산을 재사용.
-※ 2021→2022, 2021~22→2023, 2021~23→2024, 2021~24→2025.
-※ 검증연도 정답은 위험도 계산·선정 순서에 사용하지 않음.
-※ 공고일로 연도를 구분함. 결과 확정일이 없으므로 연초 가용성 누수 위험은 남음.
-※ 연도별 학습 표본이 누적되고 평가 모집단도 달라지므로 성능 변화=시장 변화로 단정 금지.
+중요: 이 코드는 과거에 사용한 3/4기간/5/6변수 연도별 승자 선정 코드가 아니다.
+공식 문서(4변수_공식기준.md)의 고정된 4변수와 3변수 기준선을 주 분석 대상으로 한다.
+2025년 결과에 따라 금액 경계·모델 구성·10건 규칙을 수정하지 않는다.
+기존에 2025년 결과를 확인했으므로 '최초 블라인드 평가'라고 주장하지 않는다.
 """
 from __future__ import annotations
-
 import argparse
-import logging
-import time
+import importlib.util
+import math
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # 화면 없이도 Windows/서버에서 PNG 저장
-import matplotlib.pyplot as plt
-
-try:
-    import kpi_2024_validation as base
-except ImportError as exc:
-    raise SystemExit('kpi_2024_validation.py와 본 파일을 scripts/kpi/ 같은 폴더에 두세요.') from exc
-
-YEARS = (2022, 2023, 2024, 2025)
-START_YEAR = 2021
-MIN_SAMPLE = 10
-TOP_RATIO = 0.20
-
-
-def log(message=''):
-    print(message, flush=True)
-
-
-def save_csv(frame: pd.DataFrame, path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False, encoding='utf-8-sig')
-
-
-def root_path(args):
-    if args.project_root is not None:
-        return args.project_root.expanduser().resolve()
-    return base.detect_project_root()
-
-
-def resolve(path: Path | None, root: Path, default: Path) -> Path:
-    if path is None:
-        return default.resolve()
-    return base.resolve_project_path(path, root)
-
-
-def spearman_no_scipy(x, y):
-    """Spearman = 평균 동점순위의 Pearson 상관. scipy 없이 재현 가능."""
-    xx = pd.Series(x, dtype='float64').rank(method='average')
-    yy = pd.Series(y, dtype='float64').rank(method='average')
-    if len(xx) < 2 or xx.nunique() <= 1 or yy.nunique() <= 1:
-        return np.nan
-    return float(np.corrcoef(xx.to_numpy(), yy.to_numpy())[0, 1])
-
-
-def kpi2_without_scipy(ranked):
-    """기존 코드와 같은 공고 순서·10분위 경계 사용; scipy 의존성만 제거."""
-    df = ranked.sort_values(['위험도', '근거공고수', 'noticeKey'],
-                            ascending=[True, True, True], kind='stable').reset_index(drop=True)
-    n = len(df)
-    if n < 10:
-        return np.nan, 0
-    df = df.copy()
-    df['분위'] = np.floor(np.arange(n) * 10 / n).astype(int) + 1
-    grouped = df.groupby('분위', sort=True)['유찰여부'].mean().reset_index()
-    rho = spearman_no_scipy(grouped['분위'], grouped['유찰여부'])
-    boundaries = int(sum(
-        df.at[i, '분위'] != df.at[i - 1, '분위']
-        and df.at[i, '위험도'] == df.at[i - 1, '위험도']
-        for i in range(1, n)
-    ))
-    return rho, boundaries
-
-
-def make_population(root, notice_path, result_path, mapping):
-    # ─────────────────────────────────────────────────────────────────────────
-    # 1단계: 원본 CLEAN 검증, 공고단위 결과판정, 기관그룹 일관성 검사
-    # ─────────────────────────────────────────────────────────────────────────
-    for label, p in [('입찰공고', notice_path), ('입찰결과', result_path)]:
-        if not p.is_file():
-            raise FileNotFoundError(f'{label} 파일이 없습니다: {p}')
-    notice = base.read_csv_safe(notice_path)
-    results = base.read_csv_safe(result_path)
-    for frame in (notice, results):
-        if 'orntCode' in frame:
-            frame['orntCode'] = frame['orntCode'].astype('string').str.strip().str.upper()
-    base.validate_inputs(notice, results)
-    base.self_tests()
-    org = base.make_org_table(notice, mapping)
-    data = base.make_analysis_table(notice, results, org)
-    if len(data) != len(notice) or data['noticeKey'].duplicated().any():
-        raise ValueError('공고 병합 후 행 수 또는 공고키 고유성 불일치')
-    return data
-
-
-def evaluate_one(train, test, model, stages, year):
-    # ─────────────────────────────────────────────────────────────────────────
-    # 2단계: 동일 모델·최소 10건·상위 20% 선정으로 매년 평가
-    # ─────────────────────────────────────────────────────────────────────────
-    scored = base.score_model(train, test, stages, minimum=MIN_SAMPLE)
-    ranked, metric, tie = base.evaluate(scored)
-    rho, decile_ties = kpi2_without_scipy(ranked)
-    n = int(metric['검증공고수'])
-    caught = int(metric['포착유찰'])
-    failures = int(metric['전체유찰'])
-    top_n = int(metric['상위20pct공고수'])
-    exact = int(ranked['적용단계'].eq(1).sum())
-    sparse = int(ranked['완화사유'].eq('표본 부족').sum())
-    invalid = int(ranked['완화사유'].eq('입력 결측·오류').sum())
-    if exact + sparse + invalid != n:
-        raise AssertionError(f'{year}년 {model}: 대체 사유 합계 불일치')
-    if not ranked['noticeKey'].is_unique or not ranked['위험도'].between(0, 1).all():
-        raise AssertionError(f'{year}년 {model}: 공고키·위험도 검사 실패')
-    return {
-        '검증연도': year, '학습시작연도': START_YEAR, '학습종료연도': year - 1,
-        '학습공고수': len(train), '학습유찰수': int(train['유찰여부'].sum()),
-        'model': model, '검증공고수': n, '전체유찰': failures,
-        '검증유찰률_pct': 100 * failures / n,
-        '상위20pct공고수': top_n, '포착유찰': caught,
-        '사전식별률_pct': float(metric['사전식별률_pct']),
-        'Precision_at20_pct': 100 * caught / top_n if top_n else np.nan,
-        'Lift_at20': (caught / failures) / (top_n / n) if failures and top_n else np.nan,
-        'KPI2_spearman': rho, '동점분위경계수': decile_ties,
-        '정확조합건수': exact, '표본부족대체건수': sparse, '결측오류대체건수': invalid,
-        '표본부족대체율_pct': 100 * sparse / n,
-        '결측오류대체율_pct': 100 * invalid / n,
-        '전체대체율_pct': 100 * (sparse + invalid) / n,
-        '근거공고수중앙값': float(ranked['근거공고수'].median()),
-        '경계위험도': tie['경계위험도'],
-        '경계동점전체': tie['경계동점전체'],
-        '경계동점선정': tie['경계동점선정'],
-        '동점전부제외_식별률': tie['동점전부제외_식별률'],
-        '동점전부포함_식별률': tie['동점전부포함_식별률'],
-    }
-
-
-def summarize_pattern(yearly):
-    # ─────────────────────────────────────────────────────────────────────────
-    # 3단계: 각 연도 내 모델 순위와 모델별 4개년 성능 변화
-    # ─────────────────────────────────────────────────────────────────────────
-    x = yearly.copy()
-    # 점수 동률이면 같은 순위; 우수 모델 건수도 동률 포함.
-    x['연도내_식별률순위'] = x.groupby('검증연도')['사전식별률_pct'].rank(
-        ascending=False, method='min').astype(int)
-    rows = []
-    for model, g in x.groupby('model', sort=False):
-        g = g.sort_values('검증연도')
-        rates = g['사전식별률_pct'].to_numpy(dtype=float)
-        fallback = g['표본부족대체율_pct'].to_numpy(dtype=float)
-        rows.append({
-            'model': model, '검증연도수': len(g),
-            '평균식별률_pct': np.mean(rates), '식별률표준편차_pp': np.std(rates, ddof=0),
-            '최저식별률_pct': np.min(rates), '최고식별률_pct': np.max(rates),
-            '식별률범위_pp': np.ptp(rates), '첫해대비마지막해_pp': rates[-1] - rates[0],
-            '1위연도수_동률포함': int(g['연도내_식별률순위'].eq(1).sum()),
-            '평균표본부족대체율_pct': np.mean(fallback),
-            '연도별증감방향': ', '.join('증가' if delta > 0 else '감소' if delta < 0 else '동일'
-                               for delta in np.diff(rates)),
-        })
-    result = pd.DataFrame(rows)
-    return x, result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4단계: 연도별 사전 식별률(Recall@20%) 변화 선그래프
+# 0단계: 사전 확정된 평가 설정 (성과를 보고 변경하지 않음)
 # ─────────────────────────────────────────────────────────────────────────────
-def save_recall_trend_chart(yearly: pd.DataFrame, dest: Path) -> None:
-    """기존 순차 검증 결과(검증연도 × model)로 PNG를 생성한다.
+MAIN_MODELS = ('3변수_기준선','4변수_공식')
+PERIODS = [
+    ('2023H1_안정성', (2021,2022), 2023, 1, '반기 안정성'),
+    ('2023H2_안정성', (2021,2022), 2023, 2, '반기 안정성'),
+    ('2024H1_안정성', (2021,2022), 2024, 1, '반기 안정성'),
+    ('2024H2_안정성', (2021,2022), 2024, 2, '반기 안정성'),
+    ('2024_예비검증', (2021,2022,2023), 2024, 0, '연간 예비 검증'),
+    ('2025_별도평가', (2021,2022,2023,2024), 2025, 0, '2025 별도 평가'),
+]
 
-    - 순위·점수 재계산 없이 실제 CSV에 사용한 사전식별률_pct만 시각화.
-    - 정확히 하나의 연도×모델이 존재하는지 검사해 잘못된 그래프를 방지.
-    - 한국어 글꼴은 실행 PC에 존재하는 폰트 중 자동 선택.
+
+def load_core():
+    """분석 함수를 공식 2024 KPI 코드에서 직접 재사용해 규칙 불일치를 방지."""
+    file = Path(__file__).resolve().with_name('kpi_2024_validation.py')
+    if not file.is_file():
+        raise FileNotFoundError(f'공통 공식 KPI 코드가 없습니다: {file}')
+    spec = importlib.util.spec_from_file_location('official4_kpi_core',file)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    expected=['prepare_population','derive_amount','quintile_boundaries','apply_quintiles',
+              'score_model','evaluate','kpi2_deciles','tie_sensitivity','find_input',
+              'read_csv_safe','STEPS_3','STEPS_4','kpi2_tie_sensitivity']
+    absent=[name for name in expected if not hasattr(mod,name)]
+    if absent:
+        raise ImportError('최신 공식 4변수 kpi_2024_validation.py 필요: '+', '.join(absent))
+    return mod
+
+
+def markdown(df:pd.DataFrame)->str:
+    """tabulate 설치 없이 Markdown 표 출력."""
+    head=[str(x).replace('|','\\|') for x in df.columns]
+    rows=[]
+    for values in df.itertuples(index=False,name=None):
+        rows.append('| '+' | '.join('' if pd.isna(v) else str(v).replace('|','\\|') for v in values)+' |')
+    return '\n'.join(['| '+' | '.join(head)+' |','| '+' | '.join(['---']*len(head))+' |',*rows])
+
+
+def model_period(core, money_pop:pd.DataFrame, scope:tuple, include_exploratory:bool, tie_reps:int, tie_seed:int):
+    label,train_years,test_year,half,purpose=scope
+    train=money_pop.loc[money_pop['연도'].isin(train_years)&money_pop['제외사유'].eq('포함')].copy()
+    mask=money_pop['연도'].eq(test_year)&money_pop['제외사유'].eq('포함')
+    if half:
+        mask &= money_pop['공고일'].dt.month.between(1,6) if half==1 else money_pop['공고일'].dt.month.between(7,12)
+    test=money_pop.loc[mask].copy()
+    if train.empty or test.empty:
+        raise ValueError(f'{label}: 학습/검증 모집단 비어 있음 (학습 {len(train)}, 검증 {len(test)})')
+    # ─────────────────────────────────────────────────────────────────────────
+    # 2단계: 훈련연도에 속한 결과확정 경쟁성 공고 중 유효 사업규모금액만으로
+    #         20·40·60·80 분위수를 계산. 평가 대상의 금액 분포/결과 사용 금지.
+    # ─────────────────────────────────────────────────────────────────────────
+    bounds=core.quintile_boundaries(train)
+    train=core.apply_quintiles(train,bounds)
+    test=core.apply_quintiles(test,bounds)
+    models={'3변수_기준선':core.STEPS_3,'4변수_공식':core.STEPS_4}
+    if include_exploratory:
+        # 보고서 5-4 참고 실험: 공식 사업규모금액과 달리 공고기간/기초금액/분기 사용.
+        # 2025 성능으로 공식 모델을 재선택하거나 분위 경계를 조정하지 않는다.
+        train=core.derive_exploratory_features(train)
+        test=core.derive_exploratory_features(test)
+        models.update(core.EXPLORATORY_MODELS)
+    rows=[]; boundaries=[]; scored=[]; kpi2_ties=[]
+    for name,steps in models.items():
+        ranked,metrics=core.evaluate(core.score_model(train,test,steps))
+        deciles,rho,splits=core.kpi2_deciles(ranked,name)
+        ties=core.tie_sensitivity(ranked,name)
+        # 2-4단계: KPI 2 동점 순서 민감도(공식 2024 코드와 동일한 구현).
+        # 동일 위험도 내에서만 무작위 재배치하고 학습/평가·기본 KPI는 변경하지 않는다.
+        tie2=core.kpi2_tie_sensitivity(ranked,name,reps=tie_reps,seed=tie_seed)
+        kpi2_ties.append({'검증구간':label,'용도':purpose,'학습연도':','.join(map(str,train_years)),
+                          '검증연도':test_year,'검증반기':('연간' if not half else f'H{half}'),**tie2})
+        rows.append({'검증구간':label,'용도':purpose,'학습연도':','.join(map(str,train_years)),
+                     '검증연도':test_year,'검증반기':('연간' if not half else f'H{half}'),
+                     '모델':name,'모델구분':('공식' if name=='4변수_공식' else '기준선' if name=='3변수_기준선' else '5-4 탐색'),
+                     '학습공고수':len(train),'학습유효금액공고수':int(train['사업규모금액'].notna().sum()),
+                     **metrics,'KPI2_spearman':rho,'KPI2_동점분위경계수':splits,
+                     'Precision_at20_pct':100*metrics['포착유찰']/metrics['상위20pct공고수'],
+                     'Lift_at20':(metrics['포착유찰']/metrics['상위20pct공고수'])/(metrics['검증유찰건수']/metrics['검증공고수'])
+                     if metrics['검증유찰건수'] else np.nan,
+                     '동점무작위기대Recall_pct':ties['동점무작위기대Recall_pct'],
+                     '동점순서최소Recall_pct':ties['동점순서최소Recall_pct'],
+                     '동점순서최대Recall_pct':ties['동점순서최대Recall_pct'],
+                     '동점경계전체건수':ties['경계동점전체건수']})
+        if purpose!='반기 안정성':
+            item=ranked[['noticeKey','businessKey','유찰여부','위험도','근거공고수','근거유찰건수',
+                         '적용단계','완화사유','순위','상위20pct']].copy()
+            item.insert(0,'검증구간',label);item.insert(1,'모델',name)
+            scored.append(item)
+    for q,b in zip((20,40,60,80),bounds):
+        boundaries.append({'검증구간':label,'학습연도':','.join(map(str,train_years)),
+                           '학습유효금액공고수':int(train['사업규모금액'].notna().sum()),
+                           '분위수_pct':q,'경계금액_원':b,'포함방식':'오른쪽 포함(이하)','보간법':'pandas linear'})
+    return rows,boundaries,scored,kpi2_ties
+
+
+def plot_trend(df:pd.DataFrame, destination:Path, mode:str):
+    """학습 데이터가 같은 평가끼리만 연결한다.
+
+    mode='half': 2021~2022 고정 학습 2023/2024 반기 4개.
+    mode='annual': 학습기간이 서로 다른 2024/2025 연간 2개를 *선 없이* 비교.
+    matplotlib가 없어도 CSV/보고서 작성은 완료하도록 한다.
     """
-    required = {'검증연도', 'model', '사전식별률_pct'}
-    missing = required - set(yearly.columns)
-    if missing:
-        raise ValueError(f'그래프 필수 컬럼 누락: {sorted(missing)}')
-    if yearly.duplicated(['검증연도', 'model']).any():
-        raise ValueError('검증연도×모델 조합이 중복되어 선그래프를 그릴 수 없습니다.')
-
-    model_names = {
-        '3변수': '3변수',
-        '4변수(기간)': '4변수',
-        '5변수(기간+금액)': '5변수',
-        '6변수(기간+금액+분기)': '6변수',
-    }
-    data = yearly.copy()
-    data['검증연도'] = pd.to_numeric(data['검증연도'], errors='raise').astype(int)
-    data['사전식별률_pct'] = pd.to_numeric(data['사전식별률_pct'], errors='coerce')
-    pivot = data.pivot(index='검증연도', columns='model', values='사전식별률_pct').sort_index()
-    missing_models = set(model_names) - set(pivot.columns)
-    if missing_models:
-        raise ValueError(f'그래프에 필요한 모델 결과 누락: {sorted(missing_models)}')
-    if pivot.loc[:, list(model_names)].isna().any().any():
-        raise ValueError('그래프의 연도별 모델 식별률에 결측값이 있습니다.')
-    if (pivot.loc[:, list(model_names)] < 0).any().any() or (pivot.loc[:, list(model_names)] > 100).any().any():
-        raise ValueError('사전 식별률 값은 0~100% 이내여야 합니다.')
-
-    from matplotlib import font_manager
-    available_fonts = {f.name for f in font_manager.fontManager.ttflist}
-    korean_fonts = ('Malgun Gothic', 'AppleGothic', 'NanumGothic', 'Noto Sans CJK KR', 'Noto Sans KR')
-    font = next((name for name in korean_fonts if name in available_fonts), None)
-    if font:
-        plt.rcParams['font.family'] = font
-        title, xlabel, ylabel = '연도별 사전 식별률 (Recall@20%)', '검증연도', '사전 식별률 (%)'
-    else:
-        # 한글 폰트가 없는 환경에서도 네모 상자나 글꼴 경고 없이 차트를 저장한다.
-        title, xlabel, ylabel = 'Yearly Recall@20%', 'Validation year', 'Recall@20% (%)'
-    plt.rcParams['axes.unicode_minus'] = False
-
-    fig, ax = plt.subplots(figsize=(10, 6))
     try:
-        for model, label in model_names.items():
-            ax.plot(pivot.index.to_numpy(), pivot[model].to_numpy(),
-                    marker='o', linewidth=2, markersize=6,
-                    label=label if font else model.replace('변수', ' variables').split('(')[0])
-        values = pivot[list(model_names)].to_numpy(dtype=float)
-        ymin = min(20.0, float(np.floor(values.min() / 5) * 5))
-        ymax = max(40.0, float(np.ceil(values.max() / 5) * 5))
-        if ymin == ymax:
-            ymax = ymin + 5
-        ax.set_ylim(ymin, ymax)
-        ax.set_yticks(np.arange(ymin, ymax + 0.1, 5))
-        ax.set_xticks(pivot.index.to_numpy())
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.grid(alpha=0.3)
-        ax.legend(title='Model' if not font else '모델')
-        fig.tight_layout()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(dest, dpi=200, bbox_inches='tight')
-    finally:
-        plt.close(fig)
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return False
+    if mode=='half':
+        periods=['2023H1_안정성','2023H2_안정성','2024H1_안정성','2024H2_안정성']
+        labels=['2023 H1','2023 H2','2024 H1','2024 H2']
+        subtitle='Fixed training: 2021–2022'
+    elif mode=='annual':
+        periods=['2024_예비검증','2025_별도평가']
+        labels=['2024 preliminary','2025 separate']
+        subtitle='Different training: 2021–2023 vs 2021–2024'
+    else:
+        raise ValueError(f'잘못된 차트 종류: {mode}')
+    fig,ax=plt.subplots(figsize=(10,5.3))
+    for model,caption,shift in [('3변수_기준선','3-var baseline',-0.09),
+                                ('4변수_공식','4-var official',0.09)]:
+        sel=df.loc[df['모델'].eq(model)].set_index('검증구간')
+        y=[float(sel.loc[p,'사전식별률_pct']) if p in sel.index else np.nan for p in periods]
+        if mode=='half':
+            ax.plot(range(len(labels)),y,'o-',lw=2,label=caption)
+        else:
+            # 서로 다른 연도별 학습 모델을 하나의 시계열로 연결하지 않는다.
+            ax.scatter(np.arange(len(labels))+shift,y,s=95,label=caption,zorder=3)
+        for i,v in enumerate(y):
+            if np.isfinite(v):
+                ax.annotate(f'{v:.2f}%',(i+(shift if mode=='annual' else 0),v),
+                            xytext=(0,9 if model=='4변수_공식' else -17),
+                            textcoords='offset points',ha='center',fontsize=9)
+    ax.set_xticks(range(len(labels)),labels)
+    ax.set_title('Recall@20% | '+subtitle)
+    ax.set_ylabel('Recall@20% (%)'); ax.set_xlabel('Validation period')
+    ax.grid(axis='y',alpha=.25);ax.legend();fig.tight_layout()
+    fig.savefig(destination,dpi=160);plt.close(fig)
+    return True
 
 
-def report_text(yearly, patterns):
-    def fmt(v):
-        return f'{v:.2f}' if pd.notna(v) else 'N/A'
-    y = yearly.pivot(index='검증연도', columns='model', values='사전식별률_pct')
-    names = list(base.MODELS)
-    lines = [
-        '# 군수품 조달 유찰 KPI 연도별 순차 검증 및 패턴 안정성', '',
-        '## 검증 설계', '',
-        '| 학습 기간 | 검증 기간 |', '|---|---|',
-    ]
-    for yr in YEARS:
-        lines.append(f'| 2021~{yr-1} | {yr} |')
-    lines += [
-        '', '공고일 기준 연도 분리, 결과확정 경쟁성 공고만 사용, 동일 기관그룹·조합 정의,',
-        '최소 10건 조건 완화, 위험도↓ → 근거공고수↓ → 공고키↑, 상위 20% 반올림(half-up).',
-        '', '## 1. 연도별 Recall@20% 비교', '',
-        '| 검증연도 | 3변수 | 4변수 | 5변수 | 6변수 | 연도 최고 조합 |',
-        '|---|---:|---:|---:|---:|---|',
-    ]
-    for yr in YEARS:
-        v = y.loc[yr]
-        best = max(v.values)
-        winners = ' / '.join(name for name in names if np.isclose(v[name], best, rtol=0, atol=1e-10))
-        lines.append(f'| {yr} | ' + ' | '.join(f'{fmt(v[name])}%' for name in names) + f' | {winners} |')
-    lines += ['', '## 2. 모델별 안정성 요약', '',
-              '| 모델 | 평균 식별률 | 최저 | 최고 | 연도간 범위 | 1위 연도수 | 평균 대체율 |',
-              '|---|---:|---:|---:|---:|---:|---:|']
-    for _, r in patterns.iterrows():
-        lines.append(f"| {r['model']} | {fmt(r['평균식별률_pct'])}% | "
-                     f"{fmt(r['최저식별률_pct'])}% | {fmt(r['최고식별률_pct'])}% | "
-                     f"{fmt(r['식별률범위_pp'])}%p | {int(r['1위연도수_동률포함'])} | "
-                     f"{fmt(r['평균표본부족대체율_pct'])}% |")
-    lines += ['', '## 3. 해석상 주의', '',
-              '- 매년 검증 모집단·유찰 기저율·학습 공고 수가 다르므로 직접 비교한 성능 변화를 시장 변화나 모델 열화로 단정하지 않는다.',
-              '- 변수 추가가 매 연도 KPI를 높이는지, 1위 모델이 매년 동일한지, 최저 연도와 연도간 범위가 어떤지 함께 판단한다.',
-              '- 4개년 평균은 각 연도를 동일 가중한 단순 평균이다. 모집단 크기로 가중한 종합 성과가 아니다.',
-              '- 각 검증연도 정답은 해당 연도 점수 산정·정렬에 사용되지 않는다.',
-              '- 공고일로 학습 연도를 제한했지만 실제 결과 확정·공개일의 부재로 인한 시점 누수 위험은 남아 있다.',
-              '- 공고기간은 공고일~참가등록마감일로 계산되고, 금액 구간은 탐색적인 경계이므로 법정 기준으로 해석하지 않는다.',
-              '- 기관그룹 분류의 잠정성, 수의계약·미확인 결과 제외에 따른 선택 편향도 고려한다.',
-              '', '## 결과 파일', '',
-              '- `01_yearly_model_results.csv`: 연도별 4개 조합의 KPI 1·2, 대체율, 경계 동점 및 근거 표본.',
-              '- `02_pattern_summary.csv`: 각 모델의 4개년 평균·최저·최고·변동폭·1위 횟수.',
-              '- `03_pattern_report.md`: 본 보고서.',
-              '- `04_recall_trend.png`: 3~6변수 연도별 Recall@20% 선그래프.',
-              '', '## 연도별 성능 추이', '', '![연도별 사전 식별률](04_recall_trend.png)',
-              '', '- `execution.log`: 실행 로그.', '']
-    return '\n'.join(lines)
+# ─────────────────────────────────────────────────────────────────────────────
+# 입력 사전 집계: Python 그룹별 callback 대신 벡터화 그룹 집계
+# 유효값이 오직 한 개면 채택, 복수 다른 유효값이면 보류하는 공식 규칙을 보존한다.
+# ─────────────────────────────────────────────────────────────────────────────
+def accelerated_plan(core, plan):
+    core.require_columns(plan,['businessKey','bidMth','budgetAmount'],'조달계획')
+    p=plan[['businessKey','bidMth','budgetAmount']].copy()
+    p['bidMth']=core.normalize_method(p['bidMth'])
+    p['budgetAmount']=pd.to_numeric(p['budgetAmount'],errors='coerce')
+    p['budgetAmount']=p['budgetAmount'].where(p['budgetAmount'].gt(0))
+    g=p.groupby('businessKey',dropna=False,sort=False)
+    z=g.agg(계획행수=('businessKey','size'),_mcount=('bidMth','nunique'),
+            _acount=('budgetAmount','nunique'),
+            계획입찰방법=('bidMth','first'),계획예산=('budgetAmount','first')).reset_index()
+    z.loc[z['_mcount'].ne(1),'계획입찰방법']=pd.NA
+    z.loc[z['_acount'].ne(1),'계획예산']=np.nan
+    return core.unique_by_key(z.drop(columns=['_mcount','_acount']), 'businessKey','사업별 조달계획')
+
+
+def accelerated_result_method(core, results):
+    core.require_columns(results,['noticeKey','bidMth'],'입찰결과')
+    r=results[['noticeKey','bidMth']].copy()
+    r['bidMth']=core.normalize_method(r['bidMth'])
+    g=r.groupby('noticeKey',dropna=False,sort=False)
+    z=g.agg(_size=('bidMth','size'),_count=('bidMth','count'),
+            _distinct=('bidMth','nunique'),결과복원입찰방법=('bidMth','first')).reset_index()
+    z.loc[z['_size'].ne(z['_count'])|z['_distinct'].ne(1),'결과복원입찰방법']=pd.NA
+    return z[['noticeKey','결과복원입찰방법']]
+
+
+def run(args):
+    core=load_core()
+    root=Path(args.project_root).resolve() if args.project_root else core.project_root()
+    paths={
+        'notice':core.find_input(root,args.notice,'bid_notice_clean_20210101_20251231','notice'),
+        'result':core.find_input(root,args.result,'bid_result_clean_20210101_20251231','result'),
+        'plan':core.find_input(root,args.plan,'procure_plan_clean_20210101_20251231','plan'),
+        'items':core.find_input(root,args.items,'bid_item_clean_20210101_20251231','items'),
+        'mapping':core.find_input(root,args.mapping,'orntCode_codeVld4_all','mapping',False)
+    }
+    if paths['mapping'] is None:
+        other=root/'data'/'analysis'/'ornt_code'/'orntCode_codeVld4_all.csv'
+        if other.is_file(): paths['mapping']=other
+        else: raise FileNotFoundError('공식 기관그룹 매핑 파일이 없습니다: data/clean 또는 data/analysis/ornt_code/orntCode_codeVld4_all.csv')
+    inputs={k:core.read_csv_safe(v) for k,v in paths.items()}
+    out=Path(args.output_dir) if args.output_dir else root/'data'/'kpi'/'rolling_validation'
+    if not out.is_absolute(): out=root/out
+    print('[1/5] 실제 CLEAN 파일 로드 및 공고 단위 결과 판정',flush=True)
+    pop=core.prepare_population(inputs['notice'],inputs['result'],inputs['mapping'])
+    # ─────────────────────────────────────────────────────────────────────────
+    # 3단계: 학습연도별 금액 복원 가능 범위 고정: (2021,22), (2021~23), (2021~24)
+    #         반기 검증 2023/2024 공고에 입찰결과의 bidMth를 사용하지 않는 것이 핵심.
+    # ─────────────────────────────────────────────────────────────────────────
+    # 계획/품목/결과의 사업·공고키 집계는 학습기간에 따라 달라지지 않으므로 한 번만 수행.
+    # 금액 복원 허용 여부(훈련 연도별)는 이후 derive_amount()에서 따로 평가한다.
+    p_agg=accelerated_plan(core,inputs['plan'])
+    i_agg=core.items_by_business(inputs['items'])
+    r_agg=accelerated_result_method(core,inputs['result'])
+    core.plan_by_business=lambda unused:p_agg
+    core.items_by_business=lambda unused:i_agg
+    core.result_method_by_notice=lambda unused:r_agg
+    unique_trains=list(dict.fromkeys(x[1] for x in PERIODS))
+    cache={}
+    for years in unique_trains:
+        print(f'[2/5] 사업규모금액 산정 및 입찰방법 복원 허용 학습연도: {years}',flush=True)
+        cache[years]=core.derive_amount(pop,inputs['plan'],inputs['items'],inputs['result'],train_years=years)
+    results=[];boundaries=[]; scored=[]; tie2_results=[]
+    for scope in PERIODS:
+        label,years,*_=scope
+        print(f'[3/5] {label} 검증 중',flush=True)
+        r,b,s,t=model_period(core,cache[years],scope,args.include_exploratory,args.tie_reps,args.tie_seed)
+        results.extend(r);boundaries.extend(b);scored.extend(s);tie2_results.extend(t)
+    result_df=pd.DataFrame(results)
+    boundary_df=pd.DataFrame(boundaries)
+    tie2_df=pd.DataFrame(tie2_results)
+    out.mkdir(parents=True,exist_ok=True)
+    result_df.to_csv(out/'01_period_model_results.csv',index=False,encoding='utf-8-sig')
+    boundary_df.to_csv(out/'02_amount_quintile_boundaries_by_train.csv',index=False,encoding='utf-8-sig')
+    tie2_df.to_csv(out/'06_kpi2_tie_sensitivity_by_period.csv',index=False,encoding='utf-8-sig')
+    if scored:
+        pd.concat(scored,ignore_index=True).to_csv(out/'03_yearly_notice_risks.csv',index=False,encoding='utf-8-sig')
+    print('[4/5] 반기 안정성·2024 예비·2025 별도 결과 요약',flush=True)
+    preview=result_df[['검증구간','모델','검증공고수','검증유찰건수','포착유찰','사전식별률_pct','대체율_pct','KPI2_spearman']].copy()
+    for col in ['사전식별률_pct','대체율_pct','KPI2_spearman']:
+        preview[col]=preview[col].map(lambda v: f'{v:.3f}' if pd.notna(v) else 'NA')
+    report=['# 공식 4변수 금액 5분위 반기 안정성 및 연간 평가','',
+            '- 공식 4변수: 기관그룹 × 계약방법 × 사업구분 × 학습기간 내 사업규모금액 5분위',
+            '- 비교 기준선: 기관그룹 × 계약방법 × 사업구분',
+            '- 2023H1/H2, 2024H1/H2는 **2021~2022년 학습 데이터 고정**',
+            '- 2024 예비: 2021~2023년 학습. 2025 별도: 2021~2024년 학습.',
+            '- 검증연도 결과로 5분위 경계·위험도 기준표를 조정하지 않음.',
+            '- 학습기간에만 결과 기반 입찰방법 복원 허용; 평가연도는 사후 복원 금지.',
+            '- 2025년 자료는 기존 프로젝트에서 확인된 이력이 있어 독립적 최초 블라인드 평가로 간주하지 않음.',
+            '- **2024년 연간 예비 검증과 2024H1/H2는 학습기간이 다르므로 직접 동일 모델 실험으로 합산하지 않음.**',
+            '- 공고일 이전 계획예산·품목정보 가용성은 추가 검증이 필요.',
+            '- 표의 탐색모델은 옵션을 켰을 때만 계산하며 공식 모델 선정에 사용하지 않음.','',
+            '## 모델별 결과','',markdown(preview),'',
+            '## 금액 5분위 학습 경계','',markdown(boundary_df),'',
+            '## KPI 2 동점 순서 민감도','',
+            f'- 각 기간·모델에서 동일 위험도 내 순서를 {args.tie_reps}회 변경 (시드 {args.tie_seed}).',
+            '- 하위/상위 2.5%는 동점 순서 민감도 구간이며 통계적 95% 신뢰구간이 아님.',
+            '',markdown(tie2_df[['검증구간','모델','기존KPI2_spearman','무작위KPI2_평균',
+                                '무작위KPI2_표준편차','무작위KPI2_하위2_5pct',
+                                '무작위KPI2_상위97_5pct','동점분위경계수']].round(4)),'',
+            '## 해석 주의','',
+            '- Recall@20%는 각 검증구간 공고의 위험도 상위 20%에서 포착한 유찰 비율.',
+            '- KPI 2는 동일 규모 10분위의 위험도 오름차순 순위와 실제 유찰률 Spearman.',
+            '- 동점이 발생하면 같은 위험도 공고를 근거공고수→공고키로 결정적 정렬함.',
+            '- 경계 동점 최소/최대 Recall은 민감도 극단값이며 신뢰구간이 아님.',
+            '- 위험도는 유사 과거공고 관측 유찰률이며 공고의 확정 유찰 확률은 아님.','']
+    (out/'04_rolling_report.md').write_text('\n'.join(report),encoding='utf-8')
+    half_chart=plot_trend(result_df,out/'05_recall_trend_halfyear.png','half')
+    annual_chart=plot_trend(result_df,out/'07_recall_comparison_annual.png','annual')
+    print('[5/5] 완료:',out,'| 반기 그래프:',half_chart,'| 연간 그래프:',annual_chart,flush=True)
+    return result_df
 
 
 def main():
-    parser = argparse.ArgumentParser(description='2021~2024 누적학습 / 2022~2025 순차 검증')
-    parser.add_argument('--project-root', type=Path, default=None)
-    parser.add_argument('--notice', type=Path, default=None)
-    parser.add_argument('--result', type=Path, default=None)
-    parser.add_argument('--mapping', type=Path, default=None)
-    parser.add_argument('--output-dir', type=Path, default=None)
-    args = parser.parse_args()
-    root = root_path(args)
-    clean = root / 'data' / 'clean'
-    out = resolve(args.output_dir, root, root / 'data' / 'kpi' / 'rolling_validation')
-    notice = resolve(args.notice, root, clean / 'bid_notice_clean_20210101_20251231.csv')
-    result = resolve(args.result, root, clean / 'bid_result_clean_20210101_20251231.csv')
-    mapping = resolve(args.mapping, root, root) if args.mapping else None
-    inputs = {p.resolve() for p in (notice, result)}
-    if mapping is not None:
-        inputs.add(mapping)
-    outputs = [out / n for n in ('01_yearly_model_results.csv', '02_pattern_summary.csv',
-                                 '03_pattern_report.md', '04_recall_trend.png', 'execution.log')]
-    if any(p.resolve() in inputs for p in outputs):
-        raise ValueError('출력 파일 경로와 입력 파일 경로가 충돌합니다.')
-    out.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(filename=out / 'execution.log', level=logging.INFO,
-                        format='%(asctime)s %(levelname)s %(message)s',
-                        encoding='utf-8', force=True)
-    start = time.perf_counter()
-    log(f'[경로] 프로젝트 루트: {root}')
-    log(f'[경로] 결과 저장: {out}')
-    log('[STEP 01] CLEAN 및 기관 분류 검증')
-    data = make_population(root, notice, result, mapping)
-    log(f'  전체 {len(data):,}건 / 결과확정 경쟁성 {int(data["평가가능"].sum()):,}건')
-    rows = []
-    for year in YEARS:
-        # ─────────────────────────────────────────────────────────────────────
-        # 4단계: 과거 누적 학습. 검증연도 결과는 train에 들어가지 않음.
-        # ─────────────────────────────────────────────────────────────────────
-        train = data.loc[data['연도'].ge(START_YEAR) & data['연도'].lt(year) & data['평가가능']].copy()
-        test = data.loc[data['연도'].eq(year) & data['평가가능']].copy()
-        if len(train) < MIN_SAMPLE or test.empty or not int(test['유찰여부'].sum()):
-            raise ValueError(f'{year}년 검증 불가: 학습 {len(train)}, 평가 {len(test)}, 유찰 {test["유찰여부"].sum()}')
-        if train['연도'].max() >= year or not test['연도'].eq(year).all():
-            raise AssertionError(f'{year}년 학습·평가 기간 분리 실패')
-        log(f'\n[STEP {year}] 학습 2021~{year-1}: {len(train):,}건 → 검증 {year}: {len(test):,}건')
-        for model, steps in base.MODELS.items():
-            row = evaluate_one(train, test, model, steps, year)
-            rows.append(row)
-            log(f"  {model}: Recall {row['사전식별률_pct']:.2f}% / "
-                f"표본부족대체율 {row['표본부족대체율_pct']:.2f}% / KPI2 {row['KPI2_spearman']:.3f}")
-    yearly, pattern = summarize_pattern(pd.DataFrame(rows))
-    if len(yearly) != len(YEARS) * len(base.MODELS):
-        raise AssertionError('연도×모델 결과 16행이 아닙니다.')
-    save_csv(yearly, outputs[0])
-    save_csv(pattern, outputs[1])
-    outputs[2].write_text(report_text(yearly, pattern), encoding='utf-8')
-    save_recall_trend_chart(yearly, outputs[3])
-    log(f'  [그래프] {outputs[3]}')
-    logging.info('완료: %s / %.2f초', out, time.perf_counter() - start)
-    log(f'\n[완료] {len(yearly)}개 연도×조합 평가 / 결과: {out}')
-    log(pattern[['model', '평균식별률_pct', '식별률범위_pp', '1위연도수_동률포함']].to_string(index=False))
+    parser=argparse.ArgumentParser(description='공식 4변수 금액5분위 반기별 안정성/연간 검증')
+    for opt in ('project-root','notice','result','plan','items','mapping','output-dir'):
+        parser.add_argument('--'+opt,default=None)
+    parser.add_argument('--tie-reps',type=int,default=300,help='KPI 2 동점 순서 무작위 반복(기본 300회)')
+    parser.add_argument('--tie-seed',type=int,default=2026,help='KPI 2 반복 난수시드(기본 2026)')
+    parser.add_argument('--include-exploratory',action='store_true',help='기존 5-4 탐색 4·5·6변수도 함께 계산')
+    args=parser.parse_args()
+    if args.tie_reps < 2: parser.error('--tie-reps는 2 이상이어야 합니다.')
+    run(args)
 
-
-if __name__ == '__main__':
-    try:
-        main()
-    except Exception as exc:
-        logging.exception('순차 검증 실패')
-        log(f'[실행 실패] {type(exc).__name__}: {exc}')
-        raise
+if __name__=='__main__':
+    main()

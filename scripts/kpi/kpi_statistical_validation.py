@@ -1,298 +1,332 @@
 # -*- coding: utf-8 -*-
-"""
-군수품 조달: 2024·2025년 KPI 1 통계적 불확실성 및 모델 간 대응 비교
+"""국방 조달 유찰 위험도 공식 4변수 모델 통계 검증.
 
-[배치]  scripts/kpi/kpi_statistical_validation.py
-        scripts/kpi/kpi_2024_validation.py  (동일 폴더, 기존 파일 그대로 사용)
-[실행]  python scripts/kpi/kpi_statistical_validation.py
-        python scripts/kpi/kpi_statistical_validation.py --reps 2000 --seed 2026
-        python scripts/kpi/kpi_statistical_validation.py --mapping data/analysis/ornt_code/mapping.csv
+[실행]
+python scripts/kpi/kpi_statistical_validation.py --reps 2000 --seed 2026
 
-[입력]  data/clean/bid_notice_clean_20210101_20251231.csv
-        data/clean/bid_result_clean_20210101_20251231.csv
-[출력]  data/kpi/statistical_validation/
-        01_model_confidence_intervals.csv  연도·모델별 KPI와 95% 신뢰구간
-        02_paired_model_differences.csv 같은 공고에서 두 모델의 KPI 차이
-        03_statistical_report.md      주요 결과 및 해석 유의사항
-        execution.log                 실행 기록
+[필수 입력] rolling_validation/03_yearly_notice_risks.csv
+[참고 입력] rolling_validation/01_period_model_results.csv,
+            rolling_validation/06_kpi2_tie_sensitivity_by_period.csv
+[출력] data/kpi/statistical_validation/
 
-주의:
-- 모델은 매 부트스트랩마다 다시 학습하지 않음. 학습 데이터를 고정한 '조건부 검증 불확실성'.
-- businessKey별 복원추출로 동일 사업 반복 공고의 의존성을 일부 반영.
-- 각 복원추출 표본에서 위험도·근거공고수·공고키 순으로 재정렬하고 상위 20% 재선정.
-- p-value를 공식 가설검정으로 산출하지 않음. 신뢰구간의 0 포함 여부는 탐색적 판단.
-- 결과 공개일/확정일을 모르면 연도별 학습 데이터의 시점 누수 가능성이 남음.
-- 실제 원본 CLEAN과 기존 KPI 출력 파일을 변경하지 않음.
+※ 기존 위험도 기준표를 재학습하지 않고, 확정한 검증 공고의 위험도 점수에 대해
+   사업키 군집 단위 대응 부트스트랩을 수행합니다.
+※ 2025년은 과거에 결과를 살펴본 이력이 있으므로 독립적인 최초 블라인드 평가로 표시하지 않습니다.
+※ 부트스트랩 신뢰구간은 KPI 2 동점 민감도 구간과 다릅니다.
 """
 from __future__ import annotations
 
 import argparse
-import logging
-import time
+import hashlib
+import json
+import copy
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 0단계: 분석 고정 기준
-# ─────────────────────────────────────────────────────────────────────────────
-START_YEAR = 2021
-VALIDATION_YEARS = (2024, 2025)
 TOP_RATIO = 0.20
-MIN_SAMPLE = 10
-MODEL_LABELS = ('3변수', '4변수(기간)', '5변수(기간+금액)', '6변수(기간+금액+분기)')
-COMPARISONS = [('3변수', m) for m in MODEL_LABELS if m != '3변수']
+BASE = '3변수_기준선'
+OFFICIAL = '4변수_공식'
+PERIODS = ('2024_예비검증', '2025_별도평가')
 
 
-def log(message=''):
-    print(message, flush=True)
+def root_from_script():
+    """스크립트가 scripts/kpi에 있으면 프로젝트 루트를 자동 판별합니다."""
+    p = Path(__file__).resolve()
+    for parent in [p.parent, *p.parents, Path.cwd(), *Path.cwd().parents]:
+        if (parent / 'data' / 'kpi').is_dir():
+            return parent
+    raise FileNotFoundError('프로젝트 경로를 못 찾았습니다. --project-root 지정 필요')
 
 
-def detect_project_root():
-    """실행 위치에 관계없이 scripts/kpi의 상위 프로젝트 루트를 찾는다."""
-    folder = Path(__file__).resolve().parent
-    for candidate in [folder, *folder.parents, Path.cwd(), *Path.cwd().parents]:
-        if (candidate / 'data' / 'clean').is_dir() and (candidate / 'scripts' / 'kpi').is_dir():
-            return candidate.resolve()
-    raise FileNotFoundError('프로젝트 루트를 찾지 못했습니다. --project-root 경로를 입력하세요.')
+def as_markdown(df: pd.DataFrame) -> str:
+    """tabulate 설치 없이 Markdown 표를 생성합니다."""
+    cols = [str(c) for c in df.columns]
+    def cell(v):
+        if pd.isna(v):
+            return ''
+        return str(v).replace('|', '\\|').replace('\n', ' ')
+    return '\n'.join(['| ' + ' | '.join(cols) + ' |',
+                      '| ' + ' | '.join(['---'] * len(cols)) + ' |',
+                      *['| ' + ' | '.join(cell(x) for x in row) + ' |'
+                        for row in df.itertuples(index=False, name=None)]])
 
 
-def resolve_path(root, path):
-    path = Path(path).expanduser()
-    return (path if path.is_absolute() else root / path).resolve()
-
-
-def locate_input(root, supplied, stem):
-    if supplied:
-        path = resolve_path(root, supplied)
-        if not path.is_file():
-            raise FileNotFoundError(f'입력 파일 없음: {path}')
-        return path
-    # 정확한 파일명 우선; 중복 파일 후보가 있으면 사용자에게 선택을 요청함.
-    clean = root / 'data' / 'clean'
-    target = clean / f'{stem}.csv'
-    if target.is_file():
-        return target
-    matches = sorted(clean.glob(stem + '*.csv'))
-    if len(matches) != 1:
-        raise FileNotFoundError(f'{stem}: 파일 후보 {len(matches)}개. --notice/--result로 지정하세요: {matches}')
-    return matches[0]
-
-
-def load_base():
-    """기존 KPI 코드와 동일한 모집단·위험도 계산 규칙을 재사용한다."""
-    try:
-        import kpi_2024_validation as base
-    except ImportError as exc:
-        raise ImportError('kpi_2024_validation.py를 이 스크립트와 같은 scripts/kpi 폴더에 배치하세요.') from exc
-    if not hasattr(base, 'MODELS') or not hasattr(base, 'score_model'):
-        raise ValueError('기존 KPI 코드 버전이 맞지 않습니다: MODELS / score_model 확인 필요')
-    if tuple(base.MODELS) != MODEL_LABELS:
-        raise ValueError(f'기존 KPI 모델 정의가 다릅니다: {list(base.MODELS)}')
-    if base.MIN_SAMPLE != MIN_SAMPLE or base.TOP_RATIO != TOP_RATIO:
-        raise ValueError('기존 코드의 최소 표본(10), 상위 선정 비율(20%) 설정 불일치')
-    return base
-
-
-def make_dataset(base, notice_path, result_path, mapping_path):
-    """공고·결과 CLEAN → 기관 분류 → 공고 단위 이진 결과 판정."""
-    notice = base.read_csv_safe(notice_path)
-    results = base.read_csv_safe(result_path)
-    for frame in (notice, results):
-        if 'orntCode' in frame.columns:
-            frame['orntCode'] = frame['orntCode'].astype('string').str.strip().str.upper()
-    base.validate_inputs(notice, results)
-    base.self_tests()
-    org = base.make_org_table(notice, mapping_path)
-    data = base.make_analysis_table(notice, results, org)
-    if len(data) != len(notice) or data['noticeKey'].duplicated().any():
-        raise ValueError('병합 후 공고 건수 또는 고유키가 일치하지 않습니다.')
-    return data
-
-
-def score_year(base, data, year):
-    """연도 y를 검증할 때 학습은 2021~(y-1)까지만 사용."""
-    train = data.loc[data['연도'].ge(START_YEAR) & data['연도'].lt(year) & data['평가가능']].copy()
-    test = data.loc[data['연도'].eq(year) & data['평가가능']].copy()
-    if len(train) < MIN_SAMPLE or test.empty or int(test['유찰여부'].sum()) == 0:
-        raise ValueError(f'{year}: 학습/검증 데이터 또는 유찰 건수 부족')
-    if not train['연도'].lt(year).all() or not test['연도'].eq(year).all():
-        raise AssertionError('공고일 기준 학습·검증 연도 분리 실패')
-    if test['businessKey'].isna().any() or test['noticeKey'].isna().any():
-        raise ValueError(f'{year}: businessKey 또는 noticeKey 결측. 군집 검증 불가')
-    model_scores = {}
-    for model, steps in base.MODELS.items():
-        scored = base.score_model(train, test, steps, minimum=MIN_SAMPLE)
-        if not scored['noticeKey'].is_unique or not scored['위험도'].between(0, 1).all():
-            raise AssertionError(f'{year} {model}: 공고키 또는 위험도 검증 실패')
-        cols = ['noticeKey', '위험도', '근거공고수']
-        model_scores[model] = scored[cols].set_index('noticeKey')
-    key_order = test['noticeKey'].astype(str).sort_values().to_numpy()
-    y = test.set_index('noticeKey').loc[key_order, '유찰여부'].to_numpy(dtype=np.int8)
-    businesses = test.set_index('noticeKey').loc[key_order, 'businessKey'].astype(str).to_numpy()
-    arrays = {}
-    for model, df in model_scores.items():
-        aligned = df.loc[key_order]
-        arrays[model] = (aligned['위험도'].to_numpy(dtype=float),
-                         aligned['근거공고수'].to_numpy(dtype=float))
-    return len(train), y, businesses, key_order, arrays
-
-
-def recall_top20(y, risk, evidence, key_rank):
-    """같은 위험도에서 근거표본 큰 순 → 공고키 사전순, half-up 상위 20%."""
+def recall(y, risk, evidence, keyrank):
+    """기존 KPI 정렬: 위험도 내림차순 → 근거공고수 내림차순 → 공고키 오름차순."""
     n = len(y)
-    if n == 0 or y.sum() == 0:
+    failures = int(y.sum())
+    if n == 0 or failures == 0:
         return np.nan
-    k = int(np.floor(n * TOP_RATIO + 0.5))
-    order = np.lexsort((key_rank, -evidence, -risk))
-    return float(100 * y[order[:k]].sum() / y.sum())
+    k = int(np.floor(n * TOP_RATIO + .5))
+    order = np.lexsort((keyrank, -evidence, -risk))
+    return float(100.0 * y[order[:k]].sum() / failures)
 
 
-def bootstrap_year(year, base_n, y, businesses, keys, arrays, reps, rng):
-    """사업키 군집 복원추출: 1회 복원추출에서 모든 모델을 함께 평가."""
-    n = len(y)
-    key_rank = np.arange(n, dtype=np.int64)  # keys는 이미 사전순 정렬됨
-    observed = {m: recall_top20(y, risk, evidence, key_rank)
-                for m, (risk, evidence) in arrays.items()}
-    # businessKey가 같은 공고는 동일 군집에 묶음.
+def prepare_period(df: pd.DataFrame, period: str):
+    """공식 모델과 기준선을 같은 공고키로 정렬·병합하고 엄격하게 검증합니다."""
+    d = df.loc[df['검증구간'].eq(period) & df['모델'].isin([BASE, OFFICIAL])].copy()
+    if set(d['모델']) != {BASE, OFFICIAL}:
+        raise ValueError(f'{period}: 기준선/공식 4변수 데이터 부족')
+    models = {}
+    for name in (BASE, OFFICIAL):
+        sub = d.loc[d['모델'].eq(name)].copy()
+        if sub['noticeKey'].isna().any() or not sub['noticeKey'].is_unique:
+            raise ValueError(f'{period}, {name}: 공고키 결측 또는 중복')
+        if not pd.to_numeric(sub['위험도'], errors='coerce').between(0, 1).all():
+            raise ValueError(f'{period}, {name}: 위험도 범위 오류')
+        if not (pd.to_numeric(sub['근거공고수'], errors='coerce') >= 10).all():
+            raise ValueError(f'{period}, {name}: 근거공고수 최소 10건 미충족')
+        models[name] = sub.set_index('noticeKey')
+    keys = sorted(models[BASE].index.tolist())
+    if set(keys) != set(models[OFFICIAL].index):
+        raise ValueError(f'{period}: 모델 간 평가 모집단 불일치')
+    a, b = [models[m].loc[keys] for m in (BASE, OFFICIAL)]
+    if not (a['유찰여부'].to_numpy() == b['유찰여부'].to_numpy()).all():
+        raise ValueError(f'{period}: 동일 공고 유찰 결과 불일치')
+    if not (a['businessKey'].fillna('') .astype(str).to_numpy() ==
+            b['businessKey'].fillna('').astype(str).to_numpy()).all():
+        raise ValueError(f'{period}: 사업키 불일치')
+    if a['businessKey'].isna().any() or a['businessKey'].astype(str).str.strip().eq('').any():
+        raise ValueError(f'{period}: 사업키 결측 — 군집 부트스트랩 중단')
+    y = a['유찰여부'].to_numpy(dtype=np.int8)
+    if not np.isin(y, [0, 1]).all() or y.sum() == 0:
+        raise ValueError(f'{period}: 이진 유찰 결과 또는 유찰 건수 오류')
+    arrays = {name:(item['위험도'].to_numpy(dtype=float),
+                    item['근거공고수'].to_numpy(dtype=float))
+              for name,item in ((BASE,a),(OFFICIAL,b))}
+    # 공고키 정렬을 기준으로 복원추출 때도 동일한 tie-break 우선순위 유지
+    rank = np.arange(len(keys), dtype=np.int64)
+    for name,item in ((BASE,a),(OFFICIAL,b)):
+        actual = recall(y, *arrays[name], rank)
+        recorded = int(item['상위20pct'].astype(bool).mul(item['유찰여부']).sum())
+        expected = round(actual * int(y.sum()) / 100)
+        if recorded != expected:
+            raise ValueError(f'{period}, {name}: 공고별 상위20pct 결과 불일치 {recorded}!={expected}')
+    return y, a['businessKey'].astype(str).to_numpy(), arrays, rank
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 4. 감사: 입력 파일 지문과 Top20 경계 동점 민감도
+# ─────────────────────────────────────────────────────────────────────────────
+def sha256_file(path: Path) -> str:
+    """입력 파일의 내용 자체를 SHA-256으로 식별합니다."""
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tie_boundary(period, name, y, risk, evidence, rank):
+    """상위 20% 경계의 동점 공고만 바꿨을 때 가능한 Recall 범위.
+
+    이는 *정렬 민감도 범위*이며 통계적 신뢰구간이 아닙니다.
+    """
+    n, failures = len(y), int(y.sum())
+    k = int(np.floor(n * TOP_RATIO + .5))
+    order = np.lexsort((rank, -evidence, -risk))
+    cutoff = float(risk[order[k - 1]])
+    above = risk > cutoff
+    tied = risk == cutoff
+    a = int(above.sum())
+    needed = k - a
+    tied_y = int(y[tied].sum())
+    tied_n = int(tied.sum())
+    fixed_y = int(y[above].sum())
+    min_hits = fixed_y + max(0, needed - (tied_n - tied_y))
+    max_hits = fixed_y + min(needed, tied_y)
+    observed_hits = int(y[order[:k]].sum())
+    expected_hits = fixed_y + needed * tied_y / tied_n
+    return dict(검증구간=period, 모델=name, 검증공고수=n,
+                상위20pct공고수=k, 경계위험도=cutoff,
+                경계동점전체건수=tied_n, 경계동점선정건수=needed,
+                경계동점유찰건수=tied_y, 관측포착유찰=observed_hits,
+                동점순서최소포착=min_hits, 동점순서최대포착=max_hits,
+                동점무작위기대포착=expected_hits,
+                관측Recall_pct=100 * observed_hits / failures,
+                동점순서최소Recall_pct=100 * min_hits / failures,
+                동점순서최대Recall_pct=100 * max_hits / failures,
+                동점무작위기대Recall_pct=100 * expected_hits / failures)
+
+
+def repeat_audit(period, y, businesses, arrays, rank, reps, rng, replay_check=25):
+    """군집 대응 부트스트랩 실행 + 반복별 감사표 + 동일 시드 재현성 검사.
+
+    - 같은 사업키에 속한 공고 행을 통째로 복원추출
+    - 3변수와 공식 4변수에 동일 재표본 적용
+    - 매 반복마다 상위 20%를 다시 선정
+    - 첫 N회는 RNG 상태를 복제하여 다시 수행한 결과와 지문을 확인
+    """
     _, inv = np.unique(businesses, return_inverse=True)
-    sort_ix = np.argsort(inv, kind='stable')
+    ordered = np.argsort(inv, kind='stable')
     sizes = np.bincount(inv)
-    offsets = np.r_[0, np.cumsum(sizes)]
-    n_clusters = len(sizes)
-    draws = {m: np.empty(reps, dtype=float) for m in MODEL_LABELS}
-    for rep in range(reps):
-        selected_clusters = rng.integers(0, n_clusters, size=n_clusters)
-        # 복원추출한 사업의 모든 공고를 복제하고 표본 크기는 매번 달라질 수 있음.
-        idx = np.concatenate([sort_ix[offsets[c]:offsets[c + 1]] for c in selected_clusters])
-        sampled_y = y[idx]
-        sampled_keys = key_rank[idx]
-        for model, (risk, evidence) in arrays.items():
-            draws[model][rep] = recall_top20(sampled_y, risk[idx], evidence[idx], sampled_keys)
-    good = np.logical_and.reduce([np.isfinite(draws[m]) for m in MODEL_LABELS])
-    if good.sum() < max(100, int(reps * 0.90)):
-        raise ValueError(f'{year}년: 유효 부트스트랩 표본 부족 {good.sum()}/{reps}')
-    draws = {m: v[good] for m, v in draws.items()}
-    model_rows, comparison_rows = [], []
-    for model in MODEL_LABELS:
-        lo, hi = np.percentile(draws[model], [2.5, 97.5])
-        model_rows.append({
-            '검증연도': year, '학습기간': f'2021~{year-1}', 'model': model,
-            '학습공고수': base_n, '검증공고수': n, '검증유찰건수': int(y.sum()),
-            '사업군집수': n_clusters, '사전식별률_pct': observed[model],
-            '95CI_하한_pct': lo, '95CI_상한_pct': hi,
-            '유효반복수': int(good.sum()), '재표본추출단위': 'businessKey',
-        })
-    for a, b in COMPARISONS:
-        delta = observed[a] - observed[b]
-        samples = draws[a] - draws[b]
-        lo, hi = np.percentile(samples, [2.5, 97.5])
-        comparison_rows.append({
-            '검증연도': year, '비교기준': a, '비교대상': b,
-            '기준식별률_pct': observed[a], '대상식별률_pct': observed[b],
-            '기준-대상_차이_pp': delta, '95CI_하한_pp': lo, '95CI_상한_pp': hi,
-            '95CI_0포함': bool(lo <= 0 <= hi),
-            '부트스트랩_차이양수비율': float(np.mean(samples > 0)),
-            '유효반복수': int(good.sum()),
-        })
-    return model_rows, comparison_rows
-
-
-def save_outputs(out, models, differences, reps, seed, notice_path, result_path, mapping_path):
-    """서로 다른 통계표를 억지로 병합하지 않고 2개 CSV와 보고서로 저장."""
-    models_df = pd.DataFrame(models)
-    differences_df = pd.DataFrame(differences)
-    models_df.to_csv(out / '01_model_confidence_intervals.csv', index=False, encoding='utf-8-sig')
-    differences_df.to_csv(out / '02_paired_model_differences.csv', index=False, encoding='utf-8-sig')
-    lines = [
-        '# 2024~2025년 KPI 통계적 신뢰성 검증', '',
-        f'- 부트스트랩 반복: {reps:,}회 / 난수 시드: {seed}',
-        '- 검증: 2024년(2021~2023년 학습), 2025년(2021~2024년 학습)',
-        '- 방법: 동일 사업키 군집 대응 부트스트랩, 매 반복마다 상위 20% 재선정',
-        '- 신뢰구간: 분위수(percentile) 95%; 고정된 학습 모델의 검증 표본 불확실성',
-        '- 실제 결과 확정일의 시점 가용성은 별도로 검증해야 함',
-        '- 이미 선택/비교한 모델에 대한 사후 분석이므로 독립적인 확증 검정으로 해석하지 않음',
-        f'- 입찰공고 입력: `{notice_path}`',
-        f'- 입찰결과 입력: `{result_path}`',
-        f'- 기관 매핑: `{mapping_path if mapping_path else "기존 코드의 잠정 분류"}`',
-        '', '## 모델별 Recall@20%와 신뢰구간', '',
-        '| 검증연도 | 모델 | Recall@20% | 95% CI |', '|---|---|---:|---:|',
-    ]
-    for row in models:
-        lines.append(f"| {row['검증연도']} | {row['model']} | {row['사전식별률_pct']:.2f}% | "
-                     f"{row['95CI_하한_pct']:.2f}~{row['95CI_상한_pct']:.2f}% |")
-    lines.extend(['', '## 3변수 대비 성능 차이', '',
-                  '| 검증연도 | 비교 | 차이(%p) | 95% CI(%p) | 0 포함 |',
-                  '|---|---|---:|---:|---|'])
-    for row in differences:
-        lines.append(f"| {row['검증연도']} | {row['비교기준']} − {row['비교대상']} | "
-                     f"{row['기준-대상_차이_pp']:+.2f} | {row['95CI_하한_pp']:+.2f}~"
-                     f"{row['95CI_상한_pp']:+.2f} | {'예' if row['95CI_0포함'] else '아니오'} |")
-    lines.extend(['', '## 해석 시 주의', '',
-                  '- 신뢰구간이 0을 포함하면 해당 비교에서 우열을 확신하기 어렵습니다.',
-                  '- 포함하지 않더라도 모델 탐색·비교를 반복한 사후 분석이라는 한계를 고려해야 합니다.',
-                  '- 2024년과 2025년의 학습기간이 다르므로 성능 차이는 연도 효과만을 뜻하지 않습니다.',
-                  '- 이 결과는 분기별 유찰률의 95% 신뢰구간과 분석 대상이 다릅니다.',
-                  '- McNemar 검정은 단순 상위 20% 선정 일치율을 비교할 뿐, Recall 우위 검정의 대체재가 아닙니다.',
-                  ''])
-    (out / '03_statistical_report.md').write_text('\n'.join(lines), encoding='utf-8')
+    cuts = np.r_[0, np.cumsum(sizes)]
+    ng = len(sizes)
+    observed = {m: recall(y, *arrays[m], rank) for m in (BASE, OFFICIAL)}
+    state = copy.deepcopy(rng.bit_generator.state)
+    rows, samples = [], {BASE: [], OFFICIAL: []}
+    for i in range(reps):
+        chosen = rng.integers(0, ng, ng)
+        idx = np.concatenate([ordered[cuts[c]:cuts[c + 1]] for c in chosen])
+        draw_hash = hashlib.blake2b(idx.tobytes(), digest_size=12).hexdigest()
+        scores = {m: recall(y[idx], arrays[m][0][idx], arrays[m][1][idx], rank[idx])
+                  for m in (BASE, OFFICIAL)}
+        for m in samples:
+            samples[m].append(scores[m])
+        rows.append(dict(검증구간=period, 반복=i + 1,
+                         복원추출사업군집수=ng, 고유추출사업군집수=int(np.unique(chosen).size),
+                         재표본공고수=len(idx), 재표본유찰건수=int(y[idx].sum()),
+                         재선정상위20pct=int(np.floor(len(idx) * TOP_RATIO + .5)),
+                         기준선Recall_pct=scores[BASE], 공식4변수Recall_pct=scores[OFFICIAL],
+                         공식기준_차이_pp=scores[OFFICIAL] - scores[BASE],
+                         재표본인덱스지문=draw_hash))
+    # 첫 N회 복원추출의 동일 시드 재현성을 직접 검증한다.
+    replay_rng = np.random.default_rng()
+    replay_rng.bit_generator.state = state
+    ncheck = min(reps, replay_check)
+    for i in range(ncheck):
+        chosen = replay_rng.integers(0, ng, ng)
+        idx = np.concatenate([ordered[cuts[c]:cuts[c + 1]] for c in chosen])
+        if hashlib.blake2b(idx.tobytes(), digest_size=12).hexdigest() != rows[i]['재표본인덱스지문']:
+            raise AssertionError(f'{period}: 반복 {i+1} 재표본 지문 불일치')
+        for m in (BASE, OFFICIAL):
+            got = recall(y[idx], arrays[m][0][idx], arrays[m][1][idx], rank[idx])
+            if not (np.isclose(got, samples[m][i], rtol=0, atol=1e-12) or
+                    (np.isnan(got) and np.isnan(samples[m][i]))):
+                raise AssertionError(f'{period}: 반복 {i+1} {m} 재현 실패')
+    valid = np.isfinite(samples[BASE]) & np.isfinite(samples[OFFICIAL])
+    if valid.sum() < max(100, int(reps * .9)):
+        raise ValueError(f'{period}: 유효 부트스트랩 부족 {valid.sum()}/{reps}')
+    model_rows = []
+    for m in (BASE, OFFICIAL):
+        lo, hi = np.percentile(np.asarray(samples[m])[valid], [2.5, 97.5])
+        model_rows.append(dict(검증구간=period, 모델=m, 검증공고수=len(y),
+                               검증유찰건수=int(y.sum()), 사업군집수=ng,
+                               Recall_at20_pct=observed[m], CI95_하한_pct=lo,
+                               CI95_상한_pct=hi, 유효반복수=int(valid.sum())))
+    delta = np.asarray(samples[OFFICIAL])[valid] - np.asarray(samples[BASE])[valid]
+    lo, hi = np.percentile(delta, [2.5, 97.5])
+    comp = dict(검증구간=period, 비교=f'{OFFICIAL} − {BASE}',
+                공식4변수_Recall_pct=observed[OFFICIAL], 기준선_Recall_pct=observed[BASE],
+                관측차이_pp=observed[OFFICIAL] - observed[BASE],
+                CI95_차이하한_pp=lo, CI95_차이상한_pp=hi,
+                CI95_0포함=bool(lo <= 0 <= hi),
+                부트스트랩_공식우세비율=float(np.mean(delta > 0)),
+                유효반복수=int(valid.sum()))
+    audit = dict(검증구간=period, 난수시드='전역 인수 --seed', 전체반복수=reps,
+                 유효반복수=int(valid.sum()), 사업군집수=ng,
+                 재현성재실행검사횟수=ncheck, 재현성검사='통과',
+                 동일재표본두모델적용=True, 반복별Top20재선정=True,
+                 기준선관측Recall_pct=observed[BASE], 공식관측Recall_pct=observed[OFFICIAL])
+    return model_rows, comp, rows, audit
 
 
 def main():
-    parser = argparse.ArgumentParser(description='2024·2025 KPI 대응 군집 부트스트랩 통계 검증')
-    parser.add_argument('--project-root', type=Path)
-    parser.add_argument('--notice', type=Path)
-    parser.add_argument('--result', type=Path)
-    parser.add_argument('--mapping', type=Path)
-    parser.add_argument('--output-dir', type=Path)
-    parser.add_argument('--reps', type=int, default=1000, help='부트스트랩 반복 횟수 (권장 2000)')
-    parser.add_argument('--seed', type=int, default=2026)
-    args = parser.parse_args()
-    if args.reps < 200:
-        raise ValueError('--reps는 200 이상으로 지정하세요. 권장값은 2000입니다.')
-    t0 = time.perf_counter()
-    root = resolve_path(Path.cwd(), args.project_root) if args.project_root else detect_project_root()
-    notice = locate_input(root, args.notice, 'bid_notice_clean_20210101_20251231')
-    result = locate_input(root, args.result, 'bid_result_clean_20210101_20251231')
-    mapping = resolve_path(root, args.mapping) if args.mapping else None
-    if mapping is not None and not mapping.is_file():
-        raise FileNotFoundError(f'기관 매핑 파일 없음: {mapping}')
-    out = resolve_path(root, args.output_dir) if args.output_dir else root / 'data' / 'kpi' / 'statistical_validation'
-    output_names = ('01_model_confidence_intervals.csv', '02_paired_model_differences.csv',
-                    '03_statistical_report.md', 'execution.log')
-    if any((out / name).resolve() in {notice, result, mapping} for name in output_names):
-        raise ValueError('입력 데이터와 출력 파일의 경로가 겹칩니다.')
-    out.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(filename=out / 'execution.log', level=logging.INFO, encoding='utf-8',
-                        format='%(asctime)s %(levelname)s %(message)s', force=True)
-    log(f'[경로] 프로젝트 루트: {root}\n[경로] 출력: {out}')
-    log('\n[STEP 01] 기존 KPI 엔진 불러오기 및 CLEAN 모집단 구성')
-    base = load_base()
-    data = make_dataset(base, notice, result, mapping)
-    rng = np.random.default_rng(args.seed)
-    all_models, all_differences = [], []
-    for year in VALIDATION_YEARS:
-        log(f'\n[STEP 02] {year}년: 2021~{year-1} 학습·{year} 검증 위험도 계산')
-        train_n, y, businesses, keys, arrays = score_year(base, data, year)
-        log(f'  학습 {train_n:,}건 / 검증 {len(y):,}건 / 유찰 {int(y.sum()):,}건')
-        log(f'[STEP 03] {year}년: 사업 단위 대응 부트스트랩 {args.reps:,}회')
-        models, differences = bootstrap_year(year, train_n, y, businesses, keys, arrays, args.reps, rng)
-        all_models.extend(models)
-        all_differences.extend(differences)
-        for row in models:
-            log(f"  {row['model']}: Recall {row['사전식별률_pct']:.2f}% "
-                f"(95% CI {row['95CI_하한_pct']:.2f}~{row['95CI_상한_pct']:.2f}%)")
-    log('\n[STEP 04] 통계 비교표·보고서 저장')
-    save_outputs(out, all_models, all_differences, args.reps, args.seed, notice, result, mapping)
-    log(f'\n[완료] 모델별 8행 + 비교 6행 / {time.perf_counter() - t0:.1f}초 / {out}')
-    logging.info('완료: %s', out)
+    p=argparse.ArgumentParser(description='공식 4변수 vs 3변수: 사업키 대응 부트스트랩')
+    p.add_argument('--project-root',type=Path)
+    p.add_argument('--risks',type=Path,help='03_yearly_notice_risks.csv')
+    p.add_argument('--period-results',type=Path,help='01_period_model_results.csv')
+    p.add_argument('--tie-results',type=Path,help='06_kpi2_tie_sensitivity_by_period.csv')
+    p.add_argument('--output-dir',type=Path)
+    p.add_argument('--reps',type=int,default=2000)
+    p.add_argument('--seed',type=int,default=2026)
+    a=p.parse_args()
+    if a.reps < 200: raise ValueError('--reps 200 이상 필수')
+    root=a.project_root.resolve() if a.project_root else root_from_script()
+    def path(arg, default):
+        v=arg if arg is not None else Path(default)
+        return v if v.is_absolute() else root/v
+    risks=path(a.risks,'data/kpi/rolling_validation/03_yearly_notice_risks.csv')
+    periods=path(a.period_results,'data/kpi/rolling_validation/01_period_model_results.csv')
+    ties=path(a.tie_results,'data/kpi/rolling_validation/06_kpi2_tie_sensitivity_by_period.csv')
+    out=path(a.output_dir,'data/kpi/statistical_validation')
+    if not risks.is_file():raise FileNotFoundError(f'Rolling 공고별 위험도 파일 없음: {risks}')
+    out.mkdir(parents=True,exist_ok=True)
+    df=pd.read_csv(risks,encoding='utf-8-sig',low_memory=False)
+    required={'검증구간','모델','noticeKey','businessKey','유찰여부','위험도','근거공고수','상위20pct'}
+    if required-set(df.columns):raise ValueError(f'공고별 파일 필수컬럼 누락: {required-set(df.columns)}')
+    rng=np.random.default_rng(a.seed)
+    models,comparisons=[],[]
+    repeat_rows, audit_rows, tie_rows = [], [], []
+    for period in PERIODS:
+        print(f'[검증] {period}: 사업군집 부트스트랩 {a.reps:,}회',flush=True)
+        y,businesses,arrays,rank=prepare_period(df,period)
+        m,c,individual,audit=repeat_audit(period,y,businesses,arrays,rank,a.reps,rng)
+        models.extend(m);comparisons.append(c)
+        repeat_rows.extend(individual);audit_rows.append(audit)
+        for name in (BASE, OFFICIAL):
+            tie_rows.append(tie_boundary(period,name,y,*arrays[name],rank))
+        print(f"  공식4변수 {c['공식4변수_Recall_pct']:.2f}% / 기준선 {c['기준선_Recall_pct']:.2f}% / 차이 {c['관측차이_pp']:+.2f}%p",flush=True)
+    mdf=pd.DataFrame(models);cdf=pd.DataFrame(comparisons)
+    mdf.to_csv(out/'01_model_confidence_intervals.csv',index=False,encoding='utf-8-sig')
+    cdf.to_csv(out/'02_paired_model_differences.csv',index=False,encoding='utf-8-sig')
+    r_df=pd.DataFrame(repeat_rows); a_df=pd.DataFrame(audit_rows); t_df=pd.DataFrame(tie_rows)
+    r_df.to_csv(out/'04_bootstrap_iteration_audit.csv',index=False,encoding='utf-8-sig')
+    a_df.to_csv(out/'05_bootstrap_run_audit.csv',index=False,encoding='utf-8-sig')
+    t_df.to_csv(out/'06_kpi1_tie_sensitivity.csv',index=False,encoding='utf-8-sig')
+    # 입력 파일 내용 SHA-256 및 실행 옵션을 별도 JSON 감사 파일로 기록한다.
+    manifest={"seed":a.seed,"bootstrap_reps":a.reps,"top_ratio":TOP_RATIO,
+              "cluster_key":"businessKey", "same_draw_for_both_models":True,
+              "reselect_top20_each_repeat":True,"rng":"numpy.default_rng (PCG64)",
+              "percentile_ci":"2.5%, 97.5%", "validation_periods":list(PERIODS),
+              "input_files":{str(x):sha256_file(x) for x in (risks,periods,ties) if x.is_file()},
+              "replay_checks":{r['검증구간']:r['재현성재실행검사횟수'] for r in audit_rows}}
+    (out/'07_reproducibility_manifest.json').write_text(
+        json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
+    lines=['# 공식 4변수 vs 3변수: KPI 통계 검증', '',
+           f'- 사업키 군집 대응 부트스트랩: {a.reps:,}회 / 시드 {a.seed}',
+           '- 2024: 2021~2023 학습 / 2025: 2021~2024 학습',
+           '- 모델을 부트스트랩마다 재학습하지 않고 검증 표본만 복원추출',
+           '- 모델 선정 이후의 사후 분석이므로 독립 확증 검정으로 주장하지 않음',
+           '- 학습 시점 계획/품목 정보의 가용성은 별도 감사 필요',
+           '- 동점은 위험도 → 근거공고수 → 공고키의 결정적 정렬 순서 유지',
+           '', '## 모델별 Recall@20% 95% 신뢰구간', '',
+           as_markdown(mdf.round(4)), '', '## 공식 4변수 − 3변수의 대응 차이', '',
+           as_markdown(cdf.round(4)), '']
+    # STEP 6. 부트스트랩 실행감사와 동점 민감도를 본문에 명확히 구분하여 기록
+    compact=t_df[['검증구간','모델','관측Recall_pct','동점순서최소Recall_pct',
+                  '동점순서최대Recall_pct','동점무작위기대Recall_pct','경계동점전체건수']].copy()
+    lines+=['## 부트스트랩 실행 감사','',
+            '- 동일 사업키는 하나의 군집으로 복원추출; 두 모델에 **동일한 추출 인덱스** 적용.',
+            '- 반복마다 공고 수가 변동하므로 상위 20% 선정 건수도 새로 계산.',
+            '- 각 반복의 재표본 크기, 유찰 건수, 두 Recall, 성능 차이, 추출 지문은 `04_bootstrap_iteration_audit.csv` 기록.',
+            '- 동일 RNG 상태에서 첫 25회를 재실행하여 추출 지문과 두 Recall 일치 여부 확인.',
+            '- 입력 SHA-256, 반복 횟수·시드·알고리즘은 `07_reproducibility_manifest.json` 기록.',
+            '', as_markdown(a_df), '',
+            '## KPI 1 경계 동점 순위 민감도 (신뢰구간 아님)', '',
+            as_markdown(compact.round(3)), '',
+            '- 동점 최소·최대는 동일 경계 위험도 안에서 선택 순서를 바꾸는 가상 극단값.',
+            '- 부트스트랩 95% 신뢰구간(표본 불확실성)과 동점 순위 범위(정렬 규칙 민감도)는 합치지 않음.',
+            '', '## 통계 검증 종합 해석','']
+    for _, row in cdf.iterrows():
+        status=('0이 포함되어 우위가 확정되지 않는다' if row['CI95_0포함']
+                else '0이 포함되지 않는다(사후 비교 한계 고려)')
+        lines.append(f"- **{row['검증구간']}**: 공식 4변수 {row['공식4변수_Recall_pct']:.2f}% / "
+                     f"기준선 {row['기준선_Recall_pct']:.2f}%, "
+                     f"차이 {row['관측차이_pp']:+.2f}%p "
+                     f"(95% CI {row['CI95_차이하한_pp']:+.2f}~{row['CI95_차이상한_pp']:+.2f}%p). "
+                     f"차이의 신뢰구간에 {status}.")
+    lines+=['', '- 두 연도의 표본 불확실성 및 경계 동점 민감도를 함께 고려하여, 사전 식별률만으로 공식 4변수의 우월성을 단정하지 않음.',
+            '- Rolling 검증의 KPI 2 순위 일관성 결과는 보조 근거이며, 2025년은 최초 블라인드 평가가 아님.',
+            '- **한계**: 기준표 재학습 불확실성과 공고일 당시 계획·품목정보의 시점 가용성은 아직 별도 검증 필요.', '']
+    if periods.is_file():
+        p_df=pd.read_csv(periods,encoding='utf-8-sig')
+        sel=p_df.loc[p_df['모델'].isin([BASE,OFFICIAL]),
+                     ['검증구간','모델','검증공고수','검증유찰건수','사전식별률_pct','KPI2_spearman']]
+        lines+=['## 반기 및 연간 검증 관측 결과 (신뢰구간 아님)','',as_markdown(sel.round(3)),'',
+                '- 반기 4구간은 2021~2022 고정 학습이며, 2024·2025 연간은 각각 학습기간이 다름.','']
+    if ties.is_file():
+        tie=pd.read_csv(ties,encoding='utf-8-sig')
+        cols=['검증구간','모델','기존KPI2_spearman','무작위KPI2_평균','무작위KPI2_표준편차']
+        lines+=['## KPI 2 동점 순서 민감도 (별도 분석)','',as_markdown(tie[cols].round(4)),'',
+                '- 동점 순서 재배열 분포는 Recall 부트스트랩 95% 신뢰구간이 아님.','']
+    lines+=['## 해석상 한계','',
+            '- 신뢰구간에 0이 포함되면 해당 차이의 방향을 명확히 확정하기 어려움.',
+            '- 2025년은 과거 확인 이력이 있으므로 완전히 새로운 블라인드 평가가 아님.',
+            '- 모델의 학습 변동, 예산/품목의 시점 누수, 다중 모델 탐색에 따른 불확실성은 본 CI에 포함되지 않음.','']
+    (out/'03_statistical_report.md').write_text('\n'.join(lines),encoding='utf-8')
+    print(f'[완료] {out}',flush=True)
 
-
-if __name__ == '__main__':
-    try:
-        main()
-    except Exception as exc:
-        logging.exception('실행 실패')
-        log(f'\n[실행 실패] {type(exc).__name__}: {exc}')
-        raise
+if __name__=='__main__':
+    main()

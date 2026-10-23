@@ -1,0 +1,23 @@
+{
+  "seed": 2026,
+  "bootstrap_reps": 2000,
+  "top_ratio": 0.2,
+  "cluster_key": "businessKey",
+  "same_draw_for_both_models": true,
+  "reselect_top20_each_repeat": true,
+  "rng": "numpy.default_rng (PCG64)",
+  "percentile_ci": "2.5%, 97.5%",
+  "validation_periods": [
+    "2024_예비검증",
+    "2025_별도평가"
+  ],
+  "input_files": {
+    "C:\\workspace\\defense-procurement-risk-dashboard\\data\\kpi\\rolling_validation\\03_yearly_notice_risks.csv": "245f81d63b307cde60701073795142b8123069a4fd8eadc067ce9945ae7ebec5",
+    "C:\\workspace\\defense-procurement-risk-dashboard\\data\\kpi\\rolling_validation\\01_period_model_results.csv": "ac05b580e9bc302856d8399c1d3a3a9cf5879a6b5c679726b4303e786605f7f4",
+    "C:\\workspace\\defense-procurement-risk-dashboard\\data\\kpi\\rolling_validation\\06_kpi2_tie_sensitivity_by_period.csv": "ec505d767e453e8258ea81e6ec210f3c16fd86040ceccc26fad781a2af1ce39c"
+  },
+  "replay_checks": {
+    "2024_예비검증": 25,
+    "2025_별도평가": 25
+  }
+}
