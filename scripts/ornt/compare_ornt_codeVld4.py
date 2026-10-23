@@ -18,6 +18,7 @@ ROOT = os.path.join(BASE_DIR, "..", "..")                # 프로젝트 루트
 ITEM_FILE = os.path.join(ROOT, "data", "raw", "bid_item_20210101_20251231.csv")
 ORNT_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "orntCode_unique.csv")
 OUT_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "orntCode_codeVld4_all.csv")
+GROUP_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "orntCode_group.csv")   # 추가
 
 # 아래 규칙과 다르게 정한 기관 (codeVld4·소속 확인 근거)
 ORG_OVERRIDE = {
@@ -117,7 +118,8 @@ result = result[["ornt", "orntCode", "기관그룹", "분류근거", "전체품�
                  "군종류수", "codeVld4분포", "최다값", "최다비율"]]
 result = result.sort_values(["최다비율", "품목수"], ascending=[True, False])
 result.to_csv(OUT_FILE, index=False, encoding="utf-8-sig")
-  
+result[["ornt", "orntCode", "기관그룹"]].to_csv(GROUP_FILE, index=False, encoding="utf-8-sig")   # 추가 
+
 # 4) 요약 출력
 print(f"\n전체 기관 {len(result)}개 (codeVld4 없음 {no_vld4.sum()}개 포함)")
 print(f"codeVld4가 전부 비어 있는 기관 {len(empty_codes)}개: {', '.join(empty_codes)}")
@@ -126,3 +128,4 @@ print(result["기관그룹"].value_counts().to_string())
 print("\n[최다값별 기관 수]")
 print(result["최다값"].replace("", "(codeVld4 없음)").value_counts().to_string())
 print(f"\n저장: {os.path.abspath(OUT_FILE)}")
+print(f"저장: {os.path.abspath(GROUP_FILE)}")   # 추가
