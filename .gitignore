@@ -6,7 +6,7 @@ data/raw
 data/clean
 
 # KPI 데이터
-data/kpi/risk_lookup_table_absorbed_2021_2023.csv
+data/kpi/
 
 # Python 캐시
 __pycache__/
