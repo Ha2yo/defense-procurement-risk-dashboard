@@ -13,18 +13,17 @@
 조달계획·계약정보 파일은 현재 A5 기본 집계에는 필요하지 않다.
 
 ## 3. 실행
-Windows PowerShell / VS Code 터미널:
+프로젝트 루트에서 (Windows PowerShell / VS Code 터미널):
 
 ```powershell
-cd C:\workspace\defense-procurement-risk-dashboard
-python -m pip install pandas numpy
-python data\clean\a5_followup_analysis_FINAL.py
+python -m pip install -r requirements.txt
+python scripts\analysis\05_rebid_followup_analysis.py
 ```
 
 데이터 위치를 별도 지정할 때:
 
 ```powershell
-python data\clean\a5_followup_analysis_FINAL.py --data-dir "C:\workspace\defense-procurement-risk-dashboard\data\clean"
+python scripts\analysis\05_rebid_followup_analysis.py --data-dir "<CLEAN 데이터 폴더 경로>"
 ```
 
 ## 4. 핵심 로직
@@ -38,7 +37,7 @@ python data\clean\a5_followup_analysis_FINAL.py --data-dir "C:\workspace\defense
 **주의:** 원문 A5 요구의 '후속공고+유효 날짜'와 프로젝트 정의서의 '결과확정 후속 재공고'는 서로 다른 기간 계산 모집단이다. 따라서 둘 다 별도 저장한다. 동일 개찰시각, 취소공고 제외 등 일부 연결 규칙은 문서에 충분히 확정되지 않아 코드에 구현 선택으로 명시했다.
 
 ## 5. 파일별 사용 방법
-출력 위치: `data/clean/a5_output_project/`
+출력 위치: `data/analysis/a5_output_project/` (용량이 커서 커밋하지 않음). 요약 3종(`a5_required_metrics.csv`, `a5_summary.csv`, `a5_validation_report.csv`)은 `data/analysis/rebid_followup/`에 커밋해 둔다.
 
 | 출력 CSV | 의미 / 사용 시점 |
 |---|---|

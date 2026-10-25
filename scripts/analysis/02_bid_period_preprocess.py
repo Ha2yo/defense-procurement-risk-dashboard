@@ -142,7 +142,7 @@ def main():
     print('\n💾 전처리 결과를 CSV로 저장하고 있습니다...')
     df.to_csv(path, index=False, encoding='utf-8-sig')
     print(f'✅ 저장 완료: {path}')
-    print('🎉 전처리가 끝났습니다! 이제 analyze_bid_period.py를 실행하면 됩니다.')
+    print('🎉 전처리가 끝났습니다! 이제 02_bid_period_analysis.py를 실행하면 됩니다.')
 
 
 # 이 파일을 직접 실행했을 때만 전처리 작업을 시작합니다.

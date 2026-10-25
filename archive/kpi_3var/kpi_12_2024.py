@@ -4,7 +4,7 @@
 실행 순서
   1) python scripts/preprocessing/merge_bid_data.py   → data/kpi/bid_master_2021_2025.csv
   2) python scripts/ornt/compare_ornt_codeVld4.py     → data/analysis/ornt_code/orntCode_codeVld4_all.csv (기관그룹)
-  3) python scripts/kpi/kpi_12_2024.py                → 이 파일
+  3) python archive/kpi_3var/kpi_12_2024.py           → 이 파일 (보관용 3변수 기준선)
 
 기준
   - 대상: 수의계약 제외, 공고 단위, 연도는 공고일 기준 (merge_bid_data.py에서 처리)

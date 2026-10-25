@@ -1,5 +1,7 @@
 # KPI 1 통계 기반 위험도 및 동점 처리 — 실행 안내
 
+> **보관용(archive)**: 현재 공식 모델(4변수, `scripts/kpi/`) 이전의 분석이다. 코드는 `archive/kpi1_statistical/`에 있다.
+
 ## 실행할 내용
 기존 연구의 **2023년 기준 선정, 2024·2025년 검증** 결과를 재현하는 코드입니다.
 머신러닝(CatBoost)은 사용하지 않습니다. Python, pandas, numpy, scipy만 필요합니다.
@@ -27,29 +29,29 @@ C:\code\defense-procurement-risk-dashboard\
 │   └── clean\
 │       ├── bid_notice_clean_20210101_20251231.csv
 │       └── bid_result_clean_20210101_20251231.csv
-└── scripts\
-    └── kpi_statistical\
-        ├── run_kpi1_revised.py
-        ├── kpi1_statistics_stepwise.py
-        ├── kpi1_statistics_hierarchy.py
-        ├── kpi1_tiebreak_statistics.py
-        ├── kpi_C_60day_comparison.py
-        ├── requirements.txt
-        └── 실행가이드.md
+├── archive\
+│   └── kpi1_statistical\
+│       ├── run_kpi1_revised.py
+│       ├── kpi1_statistics_stepwise.py
+│       ├── kpi1_statistics_hierarchy.py
+│       ├── kpi1_tiebreak_statistics.py
+│       └── kpi_C_60day_comparison.py
+└── docs\
+    └── kpi1_statistical_guide.md   (이 문서)
 ```
 
 ## 2. 설치
 
-프로젝트 가상환경에서 압축을 푼 폴더로 이동하여 설치합니다.
+프로젝트 루트에서 설치합니다.
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-## 3. 실행 (PowerShell)
+## 3. 실행 (PowerShell, 프로젝트 루트에서)
 
 ```powershell
-python run_kpi1_revised.py --input-dir "C:\code\defense-procurement-risk-dashboard\data\clean"
+python archive\kpi1_statistical\run_kpi1_revised.py --input-dir "C:\code\defense-procurement-risk-dashboard\data\clean"
 ```
 
 - `--input-dir`: CLEAN CSV가 있는 폴더(직접 지정 권장)
@@ -58,7 +60,7 @@ python run_kpi1_revised.py --input-dir "C:\code\defense-procurement-risk-dashboa
 결과 폴더를 따로 지정하고 싶다면:
 
 ```powershell
-python run_kpi1_revised.py --input-dir "C:\code\defense-procurement-risk-dashboard\data\clean" --outdir "C:\code\defense-procurement-risk-dashboard\data\kpi\statistics_tiebreak"
+python archive\kpi1_statistical\run_kpi1_revised.py --input-dir "C:\code\defense-procurement-risk-dashboard\data\clean" --outdir "C:\code\defense-procurement-risk-dashboard\data\kpi\statistics_tiebreak"
 ```
 
 **Windows 참고:** `python`이 다른 환경을 가리킨다면 `conda activate <가상환경명>` 후 실행하고, 설치 역시 동일한 환경에서 해야 합니다.

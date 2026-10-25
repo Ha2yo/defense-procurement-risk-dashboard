@@ -1,7 +1,7 @@
 # %%
 """[분석계획 4·5단계] 기술통계·시각화 + 추론통계
 
-입력: data/analysis/analysis_master_2021_2023.csv  (01_prepare_data.py 결과)
+입력: data/analysis/analysis_master_2021_2023.csv  (01_bid_conditions_prepare.py 결과)
 출력: data/analysis/results/
   - rate_<변수>.csv          조건별 건수·유찰·비유찰 건수·유찰률(95% 신뢰구간)·조정 표준화 잔차
   - chi2_summary.csv         검정 결과표 (분석건수, χ², 자유도, p값, Holm 보정 p값, Cramér's V,
@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
 try:
-    BASE_DIR = Path(__file__).resolve().parent.parent
+    BASE_DIR = Path(__file__).resolve().parents[2]
 except NameError:
     BASE_DIR = Path.cwd()
 

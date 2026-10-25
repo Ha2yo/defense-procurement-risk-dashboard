@@ -8,9 +8,18 @@ data/clean
 # KPI 데이터
 data/kpi/risk_lookup_table_absorbed_2021_2023.csv
 
-# Python 캐시
+# Python 캐시·가상환경
 __pycache__/
 *.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# 에디터·OS 파일
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
 # A5 분석 결과 CSV 제외
 /data/analysis/a5_output_project/

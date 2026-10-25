@@ -2,7 +2,7 @@
 """A4. 공고 시기별 유찰률 분석 (Python 3.11+)
 
 [VS Code 실행 버튼만 누르는 경우]
-현재 파일을 저장소의 analysis/statistical/ 폴더에 놓고 실행합니다.
+현재 파일을 저장소의 scripts/analysis/ 폴더에 놓고 실행합니다.
 data/clean/의 두 CSV를 자동으로 읽고 data/analysis/bid_timing/에 결과를 저장합니다.
 
 [분석 모집단]
@@ -18,9 +18,9 @@ A1의 21,130건은 개찰일 기준 '결과 품목 행'입니다. A4의 21,092�
 두 기준은 a4_11_a1_a3_cohort_reconciliation.csv에서 함께 보여줍니다.
 
 [터미널 선택 실행]
-python analysis/statistical/a4_timing_analysis_FINAL.py
-python analysis/statistical/a4_timing_analysis_FINAL.py --skip-plots
-python analysis/statistical/a4_timing_analysis_FINAL.py --notice 다른공고.csv --result 다른결과.csv
+python scripts/analysis/04_bid_timing_analysis.py
+python scripts/analysis/04_bid_timing_analysis.py --skip-plots
+python scripts/analysis/04_bid_timing_analysis.py --notice 다른공고.csv --result 다른결과.csv
 """
 from __future__ import annotations
 import argparse

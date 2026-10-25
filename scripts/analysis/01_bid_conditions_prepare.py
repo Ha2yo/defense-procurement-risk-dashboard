@@ -12,15 +12,15 @@
 실행 순서
   1) python scripts/preprocessing/merge_bid_data.py
   2) python scripts/ornt/compare_ornt_codeVld4.py
-  3) python analysis/01_prepare_data.py   → 이 파일
-  4) python analysis/02_analysis.py
+  3) python scripts/analysis/01_bid_conditions_prepare.py   → 이 파일
+  4) python scripts/analysis/01_bid_conditions_analysis.py
 """
 from pathlib import Path
 
 import pandas as pd
 
 try:
-    BASE_DIR = Path(__file__).resolve().parent.parent
+    BASE_DIR = Path(__file__).resolve().parents[2]
 except NameError:
     BASE_DIR = Path.cwd()
 

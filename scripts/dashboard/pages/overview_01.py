@@ -1,4 +1,5 @@
 """전체 유찰 현황: 유찰 규모 → 집중 영역."""
+import importlib
 import os
 
 import pandas as pd
@@ -7,9 +8,11 @@ import streamlit as st
 
 from scripts.dashboard.components import source_note
 from scripts.dashboard.data_loader import load_notice, load_result
-from analysis.statistical.a5_followup_analysis_FINAL import (
-    prepare as prepare_bid_result,
-)
+
+# 파일명이 숫자로 시작해 일반 import 문을 쓸 수 없으므로 importlib로 불러온다
+prepare_bid_result = importlib.import_module(
+    "scripts.analysis.05_rebid_followup_analysis"
+).prepare
 
 
 # ============================================================

@@ -3,11 +3,11 @@ import pandas as pd
 
 
 # 스크립트 위치 기준으로 프로젝트 폴더 찾기
-# 프로젝트/scripts/preprocessing/analyze_unconfirmed_by_year.py
+# 프로젝트/scripts/analysis/00_unconfirmed_by_year.py
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 
 INPUT_DIR = PROJECT_DIR / "data" / "clean"
-OUTPUT_PATH = PROJECT_DIR / "data" / "unconfirmed_by_year.csv"
+OUTPUT_PATH = PROJECT_DIR / "data" / "analysis" / "unconfirmed_by_year.csv"
 
 NOTICE_PATH = INPUT_DIR / "bid_notice_clean_20210101_20251231.csv"
 RESULT_PATH = INPUT_DIR / "bid_result_clean_20210101_20251231.csv"

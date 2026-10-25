@@ -1,13 +1,13 @@
 """2021~2023년과 2024년 공고기간·유찰률 비교 및 선 그래프 생성.
 
-설치 위치: <프로젝트 루트>/scripts/preprocessing/compare_bid_period_years.py
-기존 preprocess_bid_period.py로 생성한 CSV를 읽기만 합니다.
+설치 위치: <프로젝트 루트>/scripts/analysis/02_bid_period_year_compare.py
+기존 02_bid_period_preprocess.py로 생성한 CSV를 읽기만 합니다.
 기존 데이터 정의 유지: '순위확정'을 '비유찰(0)'로 간주합니다.
 
 실행(프로젝트 루트에서):
-  python scripts/preprocessing/compare_bid_period_years.py
-  python scripts/preprocessing/compare_bid_period_years.py --show-plots
-  python scripts/preprocessing/compare_bid_period_years.py --overwrite
+  python scripts/analysis/02_bid_period_year_compare.py
+  python scripts/analysis/02_bid_period_year_compare.py --show-plots
+  python scripts/analysis/02_bid_period_year_compare.py --overwrite
 
 기본적으로 CSV 4개와 선 그래프 PNG 2개를 저장합니다.
 카이제곱 통계표는 연도 접미사(_2021_2023, _2024_2024) 및 _v2/_v3를 자동 인식합니다.
@@ -47,7 +47,7 @@ def section(icon: str, title: str) -> None:
 
 
 def project_root() -> Path:
-    """scripts/preprocessing/compare_bid_period_years.py 기준, 두 단계 위가 프로젝트 루트."""
+    """scripts/analysis/02_bid_period_year_compare.py 기준, 두 단계 위가 프로젝트 루트."""
     return Path(__file__).resolve().parents[2]
 
 
@@ -82,7 +82,7 @@ def find_input(root: Path, given: Path | None) -> Path:
 
 def find_chi_result(root: Path, chi_dir: Path | None, input_path: Path,
                     start_year: int, end_year: int) -> Path | None:
-    """analyze_bid_period.py 저장 규칙: 연도별 기본 파일 / _v2, _v3 ...
+    """02_bid_period_analysis.py 저장 규칙: 연도별 기본 파일 / _v2, _v3 ...
 
     한 디렉터리에 동일 연도 파일 여러 개가 있다면 가장 큰 버전 선택.
     지정된 --chi-dir에서는 그 폴더만 검색합니다.

@@ -45,7 +45,7 @@ def main():
         raise FileNotFoundError(
             f'❌ 전처리 결과 파일을 찾지 못했습니다.\n'
             f'   확인할 경로: {args.input_file}\n'
-            '   💡 먼저 preprocess_bid_period.py를 실행해 주세요.'
+            '   💡 먼저 02_bid_period_preprocess.py를 실행해 주세요.'
         )
     section('📥', '1/4  전처리 데이터 확인')
     print('⏳ 분석에 사용할 CSV를 읽고 있습니다...')
