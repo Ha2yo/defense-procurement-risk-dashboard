@@ -55,6 +55,13 @@ STATUS_NO_RESULT = "후속공고 있음·결과 미확인"
 STATUS_NO_FOLLOWUP = "후속공고 자체 미확인"
 FOLLOWUP_STATUS_ORDER = [STATUS_CONFIRMED, STATUS_NO_RESULT, STATUS_NO_FOLLOWUP]
 
+# 재공고 후 결과
+RESULT_WON = "낙찰·순위확정"
+RESULT_FAILED_AGAIN = "다시 유찰"
+RESULT_PARTIAL = "일부 유찰(판단보류)"
+RESULT_UNKNOWN = "결과 미확인"
+NEXT_RESULT_ORDER = [RESULT_WON, RESULT_FAILED_AGAIN, RESULT_PARTIAL, RESULT_UNKNOWN]
+
 
 def table_mtime(name):
     """원본 Parquet 수정 시간 (파일이 바뀌면 후속공고 계산 캐시 갱신)."""
@@ -156,6 +163,18 @@ def _build_followup_table(notice_mtime, result_mtime):
     )
     df["is_rebid"] = df["next_se"].eq("재공고").fillna(False).astype(bool)
     df["next_type"] = np.where(has_followup, df["next_se"].fillna("구분 미상"), "후속공고 없음")
+    # 후속공고의 결과 (관측 종료일 이후 개찰이면 결과 미확인)
+    # string 타입은 비교 결과에 <NA>가 섞여 np.select가 거부하므로 일반 문자열로 바꾸고 빈칸은 ""로 채움
+    next_raw = (df["next_key"].map(result_status).where(observable_opening)
+                .astype(object).fillna("").astype(str))
+    df["next_result"] = np.select(
+        [(~has_followup).to_numpy(dtype=bool),
+         next_raw.isin(["낙찰", "순위확정"]).to_numpy(dtype=bool),
+         next_raw.eq("유찰").to_numpy(dtype=bool),
+         next_raw.eq("판단보류").to_numpy(dtype=bool)],
+        ["후속공고 없음", RESULT_WON, RESULT_FAILED_AGAIN, RESULT_PARTIAL],
+        default=RESULT_UNKNOWN,
+    )
     df["delay_days"] = (
         df["next_openg"].dt.normalize() - df["origin_openg"].dt.normalize()
     ).dt.days
@@ -270,8 +289,26 @@ DETAIL_COLUMNS = {
     "status": "후속 상태",
     "next_key": "후속 공고키",
     "next_type": "후속공고 유형",
+    "next_result": "후속 결과",
     "next_openg": "후속 개찰일",
     "delay_days": "추가 소요일",
+}
+
+# ---- 차트 공통 스타일 (색·글자) ----
+INK = "#1F2937"      # 진한 글자
+MUTED = "#6B7280"    # 보조 글자·축 숫자
+GRID = "#E5E7EB"     # 연한 격자선
+TRACK = "#F1F3F5"    # 막대 뒤 배경 트랙
+STATUS_COLORS = {    # 후속 상태별 색 (확인=초록, 결과 미확인=주황, 자체 미확인=회색)
+    STATUS_CONFIRMED: "#2F9E77",
+    STATUS_NO_RESULT: "#F2A541",
+    STATUS_NO_FOLLOWUP: "#9AA5B4",
+}
+NEXT_RESULT_COLORS = {  # 재공고 후 결과 (낙찰=초록, 다시 유찰=빨강, 일부 유찰=주황, 미확인=회색)
+    RESULT_WON: "#2F9E77",
+    RESULT_FAILED_AGAIN: "#E8590C",
+    RESULT_PARTIAL: "#F2A541",
+    RESULT_UNKNOWN: "#9AA5B4",
 }
 
 
@@ -283,15 +320,58 @@ def _rate(num, den):
     return num / den * 100 if den else 0.0
 
 
-def _bar(data, cat, val, order=None, color="#4C78A8"):
-    base = alt.Chart(data).encode(
-        x=alt.X(f"{val}:Q", title="건수"),
-        y=alt.Y(f"{cat}:N", sort=order or "-x", title=None),
-        tooltip=[cat, alt.Tooltip(f"{val}:Q", format=",")],
+def _count_label(n):
+    """막대 끝 라벨: '3,400건'."""
+    return f"{int(n):,}건"
+
+
+def _nice_step(raw):
+    """눈금 간격을 1·2·5·10 단위의 깔끔한 숫자로 맞춤 (예: 8.7 → 10, 340 → 500)."""
+    if raw <= 0:
+        return 1
+    mag = 10 ** np.floor(np.log10(raw))
+    for m in (1, 2, 5, 10):
+        if raw <= m * mag:
+            return max(m * mag, 1)
+    return 10 * mag
+
+
+def _bar(data, cat, val, order=None, color="#4C78A8", colors=None):
+    """가로 막대 + 끝 숫자 라벨. 회색 배경 트랙 위에 둥근 막대를 그림.
+    colors={항목: 색}을 주면 항목별로 다른 색을 씀."""
+    data = data.copy()
+    data["라벨"] = [_count_label(n) for n in data[val]]
+    max_v = float(data[val].max()) if len(data) else 0.0
+    step = _nice_step(max(max_v, 1) * 1.3 / 4)
+    domain_max = float(np.ceil(max(max_v, 1) * 1.3 / step) * step)  # 눈금이 딱 떨어지게
+    data["_track"] = domain_max
+
+    y = alt.Y(f"{cat}:N", sort=order or alt.EncodingSortField(val, order="descending"), title=None,
+              axis=alt.Axis(labelFontSize=15, labelFontWeight=600, labelColor=INK, labelLimit=400,
+                            labelPadding=12, domain=False, ticks=False))
+    x_scale = alt.Scale(domain=[0, domain_max], nice=False)
+    tooltip = [alt.Tooltip(f"{cat}:N", title="구분"), alt.Tooltip(f"{val}:Q", title="건수", format=",")]
+
+    track = alt.Chart(data).mark_bar(color=TRACK, size=26, cornerRadius=6).encode(
+        x=alt.X("_track:Q", scale=x_scale, title=None,
+                axis=alt.Axis(format=",d", values=list(np.arange(0, domain_max + step / 2, step)),
+                              labelColor=MUTED, labelFontSize=12, grid=False,
+                              domain=False, ticks=False, labelPadding=6)),
+        y=y,
     )
-    bars = base.mark_bar(color=color)
-    labels = base.mark_text(align="left", dx=4).encode(text=alt.Text(f"{val}:Q", format=","))
-    return (bars + labels).properties(height=40 * max(len(data), 2))
+    if colors:
+        bar_color = alt.Color(f"{cat}:N", legend=None,
+                              scale=alt.Scale(domain=list(colors), range=list(colors.values())))
+    else:
+        bar_color = alt.value(color)
+    bars = alt.Chart(data).mark_bar(size=26, cornerRadius=6).encode(
+        x=alt.X(f"{val}:Q", scale=x_scale), y=y, color=bar_color, tooltip=tooltip)
+    labels = alt.Chart(data).mark_text(align="left", dx=8, fontSize=15, fontWeight="bold",
+                                       color=INK).encode(
+        x=alt.X(f"{val}:Q", scale=x_scale), y=y, text="라벨:N")
+    return (alt.layer(track, bars, labels)
+            .properties(height=58 * max(len(data), 2))
+            .configure_view(strokeWidth=0))
 
 
 def render():
@@ -361,29 +441,58 @@ def render():
                 .reindex(FOLLOWUP_STATUS_ORDER, fill_value=0)
                 .rename_axis("상태").reset_index(name="건수")
             )
-            st.altair_chart(_bar(status_counts, "상태", "건수", FOLLOWUP_STATUS_ORDER),
-                            use_container_width=True)
+            st.altair_chart(
+                _bar(status_counts, "상태", "건수", FOLLOWUP_STATUS_ORDER, colors=STATUS_COLORS),
+                use_container_width=True,
+            )
         with right:
             st.subheader("요약")
+            rebid_share = _rate(s["rebid_found"], s["followup_found"])
+            # 천 단위 콤마 표기 (Streamlit 버전과 무관하게 동일하게 보이도록 문자열로 변환)
             summary = pd.DataFrame([
-                ("전체 유찰공고", s["failed"]),
-                ("후속공고·확정 결과 확인", s["confirmed"]),
-                ("후속 확정 결과 미확인 합계", s["no_result"] + s["no_followup"]),
-                ("ㄴ 후속공고 있음·결과 미확인", s["no_result"]),
-                ("ㄴ 후속공고 자체 미확인", s["no_followup"]),
-                ("결과까지 확인된 후속 재공고", s["delay_target"]),
+                ("전체 유찰공고", f"{s['failed']:,}건"),
+                ("후속공고·확정 결과 확인", f"{s['confirmed']:,}건"),
+                ("후속 확정 결과 미확인 합계", f"{s['no_result'] + s['no_followup']:,}건"),
+                ("ㄴ 후속공고 있음·결과 미확인", f"{s['no_result']:,}건"),
+                ("ㄴ 후속공고 자체 미확인", f"{s['no_followup']:,}건"),
+                ("후속공고 중 재공고", f"{s['rebid_found']:,}건 ({rebid_share:.1f}%)"),
+                ("결과까지 확인된 후속 재공고", f"{s['delay_target']:,}건"),
             ], columns=["구분", "건수"])
-            st.dataframe(summary, hide_index=True, use_container_width=True,
-                         column_config={"건수": st.column_config.NumberColumn(format="%d건")})
+            st.dataframe(
+                summary.style.set_properties(subset=["건수"], **{"text-align": "right"}),
+                hide_index=True, use_container_width=True,
+            )
 
-        st.subheader("후속공고 유형")
-        types = view.loc[view["has_followup"], "next_type"].value_counts()
-        if types.empty:
-            st.info("선택한 조건에 후속공고가 없습니다.")
-        else:
-            type_df = types.rename_axis("공고구분").reset_index(name="건수")
-            st.altair_chart(_bar(type_df, "공고구분", "건수", color="#72B7B2"),
-                            use_container_width=True)
+        # 재공고 후 결과: 후속 재공고가 결국 낙찰됐는지, 또 유찰됐는지 (테두리로 별도 영역)
+        with st.container(border=True):
+            st.subheader("재공고 후 결과")
+            rebids = view[view["has_followup"] & view["is_rebid"]]
+            if rebids.empty:
+                st.info("선택한 조건에 후속 재공고가 없습니다.")
+            else:
+                res = (rebids["next_result"].value_counts()
+                       .reindex(NEXT_RESULT_ORDER, fill_value=0)
+                       .rename_axis("결과").reset_index(name="건수"))
+                st.altair_chart(
+                    _bar(res, "결과", "건수", NEXT_RESULT_ORDER, colors=NEXT_RESULT_COLORS),
+                    use_container_width=True,
+                )
+                total_rb = len(rebids)
+                won = int(res.loc[res["결과"].eq(RESULT_WON), "건수"].sum())
+                again = int(res.loc[res["결과"].eq(RESULT_FAILED_AGAIN), "건수"].sum())
+                st.caption(
+                    f"후속 재공고 {total_rb:,}건 중 낙찰·순위확정 {won:,}건({_rate(won, total_rb):.1f}%), "
+                    f"다시 유찰 {again:,}건({_rate(again, total_rb):.1f}%) · "
+                    "결과 미확인 = 개찰일이 관측 종료일(2025-12-31) 이후이거나 결과 데이터 없음"
+                )
+            # 재공고가 아닌 후속공고는 그래프에서 빠지므로 아래에 종류와 건수만 언급
+            # '후속 데이터 상태' 필터와 상관없이 항상 보이도록 연도·분기 필터만 반영한 base 기준
+            others = base.loc[base["has_followup"] & ~base["is_rebid"], "next_type"].value_counts()
+            if not others.empty:
+                st.caption(
+                    "※ 재공고 외 후속공고도 " + " · ".join(f"{k} {v:,}건" for k, v in others.items())
+                    + f" (총 {int(others.sum()):,}건) 있으며, 이 그래프에서는 제외했습니다."
+                )
 
         st.subheader("연도별 추이")
         trend_src = base  # 연도 범위·4분기 제외 필터 반영
@@ -438,8 +547,9 @@ def render():
             limit = st.slider("표시 상한(일)", 10, max(max_day, 10), min(max_day, 100), step=5)
             shown = d[d["delay_days"] <= limit]
             hist = alt.Chart(shown).mark_bar(color="#4C78A8").encode(
-                x=alt.X("delay_days:Q", bin=alt.Bin(step=5), title="추가 소요일(일)"),
-                y=alt.Y("count()", title="건수"),
+                x=alt.X("delay_days:Q", bin=alt.Bin(step=5), title="추가 소요일(일)",
+                        axis=alt.Axis(format=",d")),
+                y=alt.Y("count()", title="건수", axis=alt.Axis(format=",d")),
                 tooltip=[alt.Tooltip("count()", title="건수")],
             )
             median_rule = alt.Chart(pd.DataFrame({"v": [st_["median"]]})).mark_rule(
@@ -469,7 +579,7 @@ def render():
         if not box_src.empty:
             box = alt.Chart(box_src).mark_boxplot(extent=1.5, size=60).encode(
                 x=alt.X("구분:N", sort=["전체", "2025년 4분기 제외"], title=None),
-                y=alt.Y("delay_days:Q", title="추가 소요일(일)"),
+                y=alt.Y("delay_days:Q", title="추가 소요일(일)", axis=alt.Axis(format=",d")),
             ).properties(height=320)
             st.altair_chart(box, use_container_width=True)
 
