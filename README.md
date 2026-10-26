@@ -1,114 +1,128 @@
 # 군수품 조달 유찰 위험 예측 대시보드 구축을 통한 조달 효율성 향상
 
-## git 사용 설명서
-https://app.notion.com/p/3f1830b2d9f78025875de5f35e33ee2d
+방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·계약정보·품목명세서, 2021~2025)를 이용해
+신규 입찰공고의 유찰 위험을 사전에 식별하고, 과거 유사 공고를 빠르게 검토할 수 있는 Streamlit 대시보드를 만든다.
 
-## 데이터 수집
+기준 문서: 프로젝트 정의서 · 데이터 항목정의서 · KPI 정의서 · 분석 계획표 · 잠재원인 우선순위표 · 연도별 결과 미확인 분포표
 
-### 1. 조달계획
-python collect_data_plan.py
+---
 
-### 2. 입찰공고 / 입찰결과
-python collect_data_list.py
+## 시작 방법
 
-### 3. 계약정보
-python collect_data_contract.py
+```bash
+# 1) 패키지 설치
+pip install -r requirements.txt
 
-## 데이터 정제
-python raw_to_clean.py
+# 2) 대시보드 실행 (프로젝트 루트에서)
+streamlit run app.py
+```
 
+데이터를 새로 수집할 때만 프로젝트 루트에 `.env` 파일이 필요하다
 
-## 데이터 병합
+```
+API_KEY_DATA_PORTAL=...
+```
 
-python scripts/preprocessing/merge_bid_data.py
-- 입찰공고·입찰결과 CLEAN 데이터 병합 (요구년도+기관코드+판단번호+공고번호+차수 기준)
-- 공고 단위로 집계, 연도는 공고일(pblancDate) 기준, 판단보류(유찰·낙찰 혼재) 공고 제외
-- 결과: data/kpi/bid_master_2021_2025.csv
+모든 스크립트는 **프로젝트 루트에서** `python scripts/...` 형태로 실행한다
 
-## 기관 분류 (scripts/ornt)
-
-### 1. 기관 목록
-python scripts/ornt/orntCode_unique.py
-- 공고 CLEAN 데이터에서 기관코드(orntCode) 기준 기관 목록(226개) 생성
-
-### 2. 기관그룹 분류 기준표
-python scripts/ornt/compare_ornt_codeVld4.py
-- 프로젝트 기관그룹 분류 기준 (기관명에 소속이 명시된 경우 기관명, 그 외 기관코드 + 개별 지정)
-- 품목명세서 codeVld4(소요군) 분포를 분류 근거로 함께 집계
-- 필요: data/raw/bid_item_20210101_20251231.csv (품목명세서)
-- 결과: data/analysis/ornt_code/orntCode_codeVld4_all.csv (기관그룹 열)
-
-### (참고) 기관별 품목명세서 표본 수집
-python scripts/ornt/collect_ornt_item_sample.py
-- 기관별 공고 1건의 품목명세서 API 호출, 군 구분(miltDivs·codeVld4) 수집
-
-## KPI (scripts/kpi)
-
-python scripts/kpi/kpi_12_2024.py
-- 2021~2023년 기관그룹×계약방법×사업구분 조합별 유찰률 룩업 (10건 미만은 상위 조합 대체)
-- KPI 1: 고위험 공고(상위 20%) 사전 식별률 (2024년 검증, 동점 상한·하한·기대값 포함)
-- KPI 2: 위험도 10분위별 실제 유찰률 단조성 (스피어만 상관계수)
-- 결과: data/kpi/risk_lookup_2021_2023.csv, data/kpi/risk_stage_2024.csv
-
-## 분석 (analysis)
-
-### 1. 분석 데이터 준비
-python analysis/01_prepare_data.py
-- 2021~2023년 경쟁성 입찰, 기관 그룹·유찰 여부 부여
-
-### 2. 유찰 조건 분석
-python analysis/02_analysis.py
-- 기관·계약방법·사업구분별 유찰률표, 카이제곱 검정·Cramér's V, 막대그래프
-
-## 기관 분류 확인 (scripts/ornt)
-
-### 1. 기관 목록
-python scripts/ornt/orntCode_unique.py
-- 공고 CLEAN 데이터에서 기관코드(orntCode) 기준 기관 목록(226개) 생성
-
-### 2. 기관별 품목명세서 표본 수집
-python scripts/ornt/collect_ornt_item_sample.py
-- 기관별 공고 1건의 품목명세서 API 호출, 군 구분(miltDivs·codeVld4) 수집
-
-### 3. 기관별 소요군 분포
-python scripts/ornt/compare_ornt_codeVld4.py
-- 품목명세서 전체에서 기관별 codeVld4(소요군) 분포·비율·군종류수 집계
----------------------------------------------------------
-## A2.공고기간 분석
-분석 순서: 데이터 전처리 → 유찰률 통계 분석 → 연도별 비교
-### 1.공고기간 데이터 전처리
-
-preprocess_bid_period.py
-
-=> 입찰공고와 입찰결과 데이터를 공고키(noticeKey)로 연결
-공고일과 참가등록마감일을 활용한 공고기간 계산
-공고기간 구간 분류(5일 이하 / 5일 초과~10일 / 10일 초과) 및 분석대상 추출
-### 2. 공고기간별 유찰률 통계 분석
-
-analyze_bid_period.py
-
-=>공고기간 기초통계 및 구간별 유찰률 산출
-카이제곱 독립성 검정을 통한 공고기간과 유찰 여부의 통계적 연관성 분석
-
-### 3.연도별 공고기간 및 유찰률 비교
-
-compare_bid_period_years.py
-
-=>2021~2023년과 2024년의 공고기간 및 유찰률 비교
-연도별 유찰률 추세 분석 및 선 그래프 생성
-기간별 카이제곱 검정 결과 비교 및 검증
---------------------------------------------
+---
 
 ## 폴더 구조
 
-data/raw
-- API 원본 데이터
+```
+├─ app.py                    대시보드 진입점
+├─ requirements.txt
+├─ scripts/                  실행 순서 = 폴더 순서
+│  ├─ collection/            ① 데이터 수집 (OPEN API)
+│  ├─ preprocessing/         ② 정제·병합·계약 요구연도 복원
+│  ├─ ornt/                  ③ 기관그룹 분류
+│  ├─ analysis/              ④ 분석 계획표 1~5번 (파일명 앞 번호 = 분석 번호)
+│  ├─ kpi/                   ⑤ 분석 계획표 6번: 공식 4변수 위험도·KPI 검증
+│  └─ dashboard/             ⑥ 대시보드 화면
+├─ data/
+│  ├─ raw/  clean/           원본·정제 데이터 (커밋하지 않음)
+│  ├─ dashboard/             대시보드 입력 parquet
+│  ├─ analysis/              분석 산출물 (기관 분류표, 공고기간·금액·후속공고 결과 등)
+│  └─ kpi/                   KPI 산출물
+├─ docs/                     분석별 실행 가이드
+└─ archive/                  이전 기준 코드 (보관용, 현재 기준으로 실행하지 않음)
+```
 
-data/clean
-- 정제 데이터
+---
 
-## 환경설정
+## 실행 순서
 
-.env 파일에 다음 항목 필요
+### ① 데이터 수집 — `scripts/collection/`
+| 명령 | 내용 | 결과 |
+|---|---|---|
+| `python scripts/collection/collect_data_plan.py` | 조달계획 | `data/raw/` |
+| `python scripts/collection/collect_data_list.py` | 입찰공고·입찰결과 | `data/raw/` |
+| `python scripts/collection/collect_data_contract.py` | 계약정보 | `data/raw/` |
+| `python scripts/collection/collect_data_item.py` | 품목명세서 | `data/raw/` |
 
-API_KEY_DATA_PORTAL=... 
+### ② 정제·병합 — `scripts/preprocessing/`
+| 명령 | 내용 | 결과 |
+|---|---|---|
+| `python scripts/preprocessing/raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) | `data/clean/` |
+| `python scripts/preprocessing/merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 | `data/kpi/bid_master_2021_2025.csv` |
+| `python scripts/preprocessing/restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 | `data/analysis/contract_year_independent/` |
+| `python scripts/preprocessing/check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) | `data/analysis/item_amount_check/` |
+
+### ③ 기관그룹 분류 — `scripts/ornt/`
+| 명령 | 내용 | 결과 |
+|---|---|---|
+| `python scripts/ornt/orntCode_unique.py` | 기관코드 기준 기관 목록(226개) | `data/analysis/ornt_code/orntCode_unique.csv` |
+| `python scripts/ornt/compare_ornt_codeVld4.py` | **기관그룹 분류 기준표** (품목명세서 소요군 분포를 근거로 함께 집계, `data/raw/` 품목명세서 필요) | `data/analysis/ornt_code/orntCode_codeVld4_all.csv` |
+| `python scripts/ornt/collect_ornt_item_sample.py` | (참고) 기관별 공고 1건의 품목명세서 표본 수집 | `data/analysis/ornt_code/orntCode_codeVld4.csv` |
+
+### ④ 분석 — `scripts/analysis/`
+| 분석 계획표 | 명령 | 결과 |
+|---|---|---|
+| 사전 점검: 연도별 결과 미확인 | `python scripts/analysis/00_unconfirmed_by_year.py` | `data/analysis/unconfirmed_by_year.csv` |
+| 1. 기관·계약방법·사업구분 (1단계) | `python scripts/analysis/01_bid_conditions_prepare.py` | `data/analysis/analysis_master_2021_2023.csv` |
+| 1. 기관·계약방법·사업구분 (2단계) | `python scripts/analysis/01_bid_conditions_analysis.py` | `data/analysis/results/` |
+| 2. 공고기간 (1단계) | `python scripts/analysis/02_bid_period_preprocess.py` | `data/analysis/bid_period/bid_period_preprocessed.csv` |
+| 2. 공고기간 (2단계) | `python scripts/analysis/02_bid_period_analysis.py` | `data/analysis/bid_period/` |
+| 2. 공고기간 (3단계) | `python scripts/analysis/02_bid_period_year_compare.py` | `data/analysis/bid_period/year_comparison/` |
+| 3. 금액 구간 (사업규모금액 5분위) | `python scripts/analysis/03_bid_amount_analysis.py` | `data/analysis/bid_amount/` |
+| 4. 공고 시기 | `python scripts/analysis/04_bid_timing_analysis.py` | `data/analysis/bid_timing/` |
+| 5. 유찰 후 재공고 | `python scripts/analysis/05_rebid_followup_analysis.py` ([가이드](docs/05_rebid_followup_guide.md)) | `data/analysis/a5_output_project/` (요약: `data/analysis/rebid_followup/`) |
+
+### ⑤ 위험도·KPI (분석 계획표 6번) — `scripts/kpi/`
+공식 위험도 = 2021~2023년 결과확정 경쟁성 공고의 **기관그룹 × 계약방법 × 사업구분 × 사업규모금액 5분위** 조합별 유찰률
+(10건 미만이거나 금액 미확인이면 상위 조합으로 대체). 2024년 예비 검증, 2025년 최종 평가.
+
+| 순서 | 명령 | 내용 | 결과 |
+|---|---|---|---|
+| 1 | `python scripts/kpi/kpi_2024_validation.py` | 공식 4변수 위험도 산정, 2024년 KPI 1(상위 20% 사전 식별률)·KPI 2(10분위 스피어만) | `data/kpi/kpi_validation/` |
+| 2 | `python scripts/kpi/kpi_rolling_pattern_2022_2025.py` | 반기·연간 안정성, 동점 민감도 | `data/kpi/rolling_validation/` |
+| 3 | `python scripts/kpi/kpi_statistical_validation.py --reps 2000 --seed 2026` | 사업키 군집 부트스트랩 95% 신뢰구간 (2번 결과 필요) | `data/kpi/statistical_validation/` |
+
+### ⑥ 대시보드 — `scripts/dashboard/`
+`streamlit run app.py` · 화면: 전체 유찰 현황 / 공고별 위험도·유사사례 / 유찰 요인 분석 / 유찰 후 지연 영향
+입력은 `data/dashboard/*.parquet`와 `data/analysis/ornt_code/orntCode_codeVld4_all.csv`.
+
+---
+
+## 분석 기준 요약
+- **분석 단위**: 공고키(`demandYear + orntCode + dcsNo + pblancNo + pblancOdr`) 기준 공고 1건
+- **결과 변수**: 유찰 = 1, 낙찰·순위확정 = 0. 결과 미확인·판단보류·수의계약은 제외
+- **기간 구분**: 공고일(`pblancDate`) 기준 — 학습 2021~2023 / 예비 검증 2024 / 최종 평가 2025
+- **기초금액(`bsicExpt`)은 위험도에 사용하지 않음** (단가제 공고에 단가 입력 혼입) → 조달계획 예산·품목 총액으로 산정한 사업규모금액 사용
+- 상세 정의는 데이터 항목정의서·KPI 정의서를 따른다.
+
+---
+
+## archive/ (보관용)
+| 경로 | 내용 |
+|---|---|
+| `archive/kpi_3var/kpi_12_2024.py` | 이전 3변수(기관그룹×계약방법×사업구분) KPI. 4변수 비교 기준선 확인용 |
+| `archive/kpi1_statistical/` | 이전 KPI 1 동점 처리 통계 분석 ([가이드](docs/kpi1_statistical_guide.md)) |
+| `archive/notebooks/` | 초기 위험도 분석 설명 노트북 |
+| `archive/amount_validation/` | 03번과 같은 수치를 내는 이전 금액 검증 코드. 03번에 없는 입찰방법 교차검증표(06) 확인용 |
+
+---
+
+## 협업 규칙
+- git 사용 설명서: https://app.notion.com/p/3f1830b2d9f78025875de5f35e33ee2d
+- main에는 PR로만 합친다. 커밋 전 `git status`로 의도하지 않은 파일이 없는지 확인한다.
