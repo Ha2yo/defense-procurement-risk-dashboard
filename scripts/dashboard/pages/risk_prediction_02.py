@@ -544,22 +544,27 @@ def render():
         st.error(f"분석 데이터 준비 실패: {exc}")
         return
 
+    # 사전 검토 화면이므로 2025년 실제 결과는 기본 숨김. 켜면 결과 필터·결과 열·사후 유찰률을 함께 보여 준다
+    show_actual = st.toggle("2025년 실제 결과 보기 (사후 확인용)", value=False, key="risk_show_actual",
+                            help="사전 검토 화면이므로 기본은 숨김입니다. 검증할 때만 켜세요.")
+
     tab_notice, tab_manual = st.tabs(["2025년 공고 선택", "직접 입력"])
     with tab_notice:
         st.caption("취소공고·수의계약·개찰일 역전 공고 제외 · 결과 미확인 공고는 조회 가능")
         if not notice_2025.empty:
-            # 실제 결과별 체크박스 필터. 기본값은 전부 선택
-            counts = notice_2025["결과상태"].value_counts()
-            statuses = [s for s in RESULT_ORDER if s in counts.index]
-            statuses += [s for s in counts.index if s not in statuses]
-            st.write("**2025년 실제 결과로 거르기**")
-            filter_cols = st.columns(len(statuses))
-            picked = [
-                status for col, status in zip(filter_cols, statuses)
-                if col.checkbox(f"{RESULT_SHORT.get(status, status)} ({counts[status]:,})", value=True,
-                                key=f"risk_result_filter_{status}", help=RESULT_HELP.get(status))
-            ]
-            notice_2025 = notice_2025.loc[notice_2025["결과상태"].isin(picked)]
+            if show_actual:
+                # 실제 결과별 체크박스 필터. 기본값은 전부 선택
+                counts = notice_2025["결과상태"].value_counts()
+                statuses = [s for s in RESULT_ORDER if s in counts.index]
+                statuses += [s for s in counts.index if s not in statuses]
+                st.write("**2025년 실제 결과로 거르기**")
+                filter_cols = st.columns(len(statuses))
+                picked = [
+                    status for col, status in zip(filter_cols, statuses)
+                    if col.checkbox(f"{RESULT_SHORT.get(status, status)} ({counts[status]:,})", value=True,
+                                    key=f"risk_result_filter_{status}", help=RESULT_HELP.get(status))
+                ]
+                notice_2025 = notice_2025.loc[notice_2025["결과상태"].isin(picked)]
 
             # 위험 등급 범위 필터. 등급 자체는 필터 전 2025년 공고 전체 기준
             low, high = st.select_slider(
@@ -568,9 +573,13 @@ def render():
             notice_2025 = notice_2025.loc[notice_2025["위험등급"].between(low, high)]
 
             with st.expander("위험 등급별 2025년 공고 현황", expanded=False):
-                st.dataframe(grade_summary(ranked_2025, notice_all), hide_index=True, use_container_width=True)
-                st.caption("등급은 2025년 공고 전체를 위험도 순으로 같은 건수씩 나눈 순위입니다. "
-                           "실제 유찰률은 결과확정 공고(낙찰·유찰·순위확정)만으로 계산한 사후 결과입니다.")
+                summary_tbl = grade_summary(ranked_2025, notice_all)
+                if not show_actual:
+                    summary_tbl = summary_tbl.drop(columns="실제 유찰률(사후)")
+                st.dataframe(summary_tbl, hide_index=True, use_container_width=True)
+                st.caption("등급은 2025년 공고 전체를 위험도 순으로 같은 건수씩 나눈 순위입니다."
+                           + (" 실제 유찰률은 결과확정 공고(낙찰·유찰·순위확정)만으로 계산한 사후 결과입니다."
+                              if show_actual else ""))
         if notice_2025.empty:
             st.warning("조건에 맞는 2025년 공고가 없습니다.")
         else:
@@ -588,12 +597,16 @@ def render():
                 st.info("검색 결과가 없습니다.")
             else:
                 st.caption(f"조건에 맞는 2025년 공고 {len(matched):,}건 (위험도 높은 순)")
-                st.dataframe(style_results(notice_table(matched)), hide_index=True, use_container_width=True, height=280)
+                table = notice_table(matched)
+                if show_actual:
+                    st.dataframe(style_results(table), hide_index=True, use_container_width=True, height=280)
+                else:
+                    st.dataframe(table.drop(columns="실제 결과"), hide_index=True, use_container_width=True,
+                                 height=280)
                 label_map = dict(zip(matched["noticeKey"].astype(str), matched["검색표시"].astype(str)))
                 with st.form("risk_notice_form"):
                     key = st.selectbox("공고 선택", options=[""] + list(label_map),
                                        format_func=lambda x: label_map.get(x, "공고를 선택하세요"))
-                    show_actual = st.checkbox("2025년 실제 입찰결과 함께 보기", value=True)
                     submit = st.form_submit_button("선택 공고 분석", type="primary")
                 if submit:
                     if not key:
@@ -604,7 +617,7 @@ def render():
                             "mode": "공고 선택", "noticeKey": key, "기관그룹": str(selected["기관그룹"]),
                             "busiDivs": str(selected["busiDivs"]), "cntrctMth": str(selected["cntrctMth"]),
                             "공고명": str(selected["bidNm"]), "발주기관": str(selected["ornt"]),
-                            "실제결과": str(selected["결과상태"]), "실제결과표시": show_actual,
+                            "실제결과": str(selected["결과상태"]),
                             "사업규모금액": selected["사업규모금액"],
                             "사업규모구간": selected["사업규모구간"],
                             "금액출처": selected["금액출처"],
@@ -628,7 +641,7 @@ def render():
                 st.warning("세 조건을 모두 선택해 주세요.")
             else:
                 st.session_state["risk_input"] = {"mode": "직접 입력", "noticeKey": None,
-                    "기관그룹": org, "busiDivs": business, "cntrctMth": method, "실제결과표시": False,
+                    "기관그룹": org, "busiDivs": business, "cntrctMth": method,
                     "사업규모금액": manual_amount if manual_amount > 0 else None,
                     "사업규모구간": amount_bin(manual_amount, boundaries),
                     "금액출처": "직접 입력" if manual_amount > 0 else "금액 미입력"}
@@ -669,15 +682,18 @@ def render():
         return
 
     grade, top_share = grade_of(risk, ranked_2025, inp.get("noticeKey"))
-    a, g, b, c = st.columns(4)
+    # 큰 지표는 사전 예측 정보만. 실제 결과는 스위치를 켰을 때 아래에 작게 사후 확인으로 표시
+    a, g, b = st.columns(3)
     a.metric("과거 유사조건 유찰률 (4변수 우선)", f'{risk["위험도"] * 100:.2f}%')
     g.metric("위험 등급", f"{grade}등급 / 10" + (" · 고위험" if grade >= 9 else ""),
              delta=f"2025년 공고 중 상위 {np.ceil(top_share * 100):.0f}%", delta_color="off",
              help=f"2025년 공고 {len(ranked_2025):,}건을 위험도 순으로 10등급으로 나눈 순위 (1 = 가장 낮음). "
                   "9·10등급이 상위 20% 고위험군이며, 실제 결과는 순위에 사용하지 않는다.")
     b.metric("근거 공고 수", f'{risk["근거공고수"]:,}건')
-    actual = inp.get("실제결과", "해당 없음") if inp.get("실제결과표시") else "미표시"
-    c.metric("2025년 실제 결과(사후)", RESULT_LABELS.get(actual, actual), help=RESULT_HELP.get(actual))
+    if show_actual and inp.get("noticeKey"):
+        actual = inp.get("실제결과")
+        st.caption(f"사후 확인 · 2025년 실제 결과: **{RESULT_LABELS.get(actual, actual)}** — "
+                   f"{RESULT_HELP.get(actual, '')}")
 
     with st.container(border=True):
         st.subheader("위험도 산정 근거")
