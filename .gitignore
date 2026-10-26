@@ -23,3 +23,7 @@ Thumbs.db
 
 # A5 분석 결과 CSV 제외
 /data/analysis/a5_output_project/
+
+# 금액 분석: 공고 단위 상세 금액, 보관용 검증 코드 산출물 제외
+/data/analysis/bid_amount/notice_amounts.csv
+/data/analysis/bid_amount_4vars/

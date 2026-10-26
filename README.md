@@ -66,6 +66,7 @@ API_KEY_DATA_PORTAL=...
 | `python scripts/preprocessing/raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) | `data/clean/` |
 | `python scripts/preprocessing/merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 | `data/kpi/bid_master_2021_2025.csv` |
 | `python scripts/preprocessing/restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 | `data/analysis/contract_year_independent/` |
+| `python scripts/preprocessing/check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) | `data/analysis/item_amount_check/` |
 
 ### ③ 기관그룹 분류 — `scripts/ornt/`
 | 명령 | 내용 | 결과 |
@@ -83,11 +84,9 @@ API_KEY_DATA_PORTAL=...
 | 2. 공고기간 (1단계) | `python scripts/analysis/02_bid_period_preprocess.py` | `data/analysis/bid_period/bid_period_preprocessed.csv` |
 | 2. 공고기간 (2단계) | `python scripts/analysis/02_bid_period_analysis.py` | `data/analysis/bid_period/` |
 | 2. 공고기간 (3단계) | `python scripts/analysis/02_bid_period_year_compare.py` | `data/analysis/bid_period/year_comparison/` |
-| 3. 금액 구간 | `python scripts/analysis/03_bid_amount_analysis.py` | `data/analysis/bid_amount/` |
+| 3. 금액 구간 (사업규모금액 5분위) | `python scripts/analysis/03_bid_amount_analysis.py` | `data/analysis/bid_amount/` |
 | 4. 공고 시기 | `python scripts/analysis/04_bid_timing_analysis.py` | `data/analysis/bid_timing/` |
 | 5. 유찰 후 재공고 | `python scripts/analysis/05_rebid_followup_analysis.py` ([가이드](docs/05_rebid_followup_guide.md)) | `data/analysis/a5_output_project/` (요약: `data/analysis/rebid_followup/`) |
-
-> 참고: `03_bid_amount_analysis.py`는 아직 기초금액(bsicExpt) 3구간 기준이다. 분석 계획표 3번의 현재 기준(사업규모금액 5분위)은 ⑤ KPI 코드에서 산정한다.
 
 ### ⑤ 위험도·KPI (분석 계획표 6번) — `scripts/kpi/`
 공식 위험도 = 2021~2023년 결과확정 경쟁성 공고의 **기관그룹 × 계약방법 × 사업구분 × 사업규모금액 5분위** 조합별 유찰률
@@ -120,6 +119,7 @@ API_KEY_DATA_PORTAL=...
 | `archive/kpi_3var/kpi_12_2024.py` | 이전 3변수(기관그룹×계약방법×사업구분) KPI. 4변수 비교 기준선 확인용 |
 | `archive/kpi1_statistical/` | 이전 KPI 1 동점 처리 통계 분석 ([가이드](docs/kpi1_statistical_guide.md)) |
 | `archive/notebooks/` | 초기 위험도 분석 설명 노트북 |
+| `archive/amount_validation/` | 03번과 같은 수치를 내는 이전 금액 검증 코드. 03번에 없는 입찰방법 교차검증표(06) 확인용 |
 
 ---
 
