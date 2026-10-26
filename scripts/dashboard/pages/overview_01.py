@@ -126,6 +126,7 @@ def render():
     st.caption("유찰 건수와 유찰률을 함께 비교해 먼저 검토할 영역을 탐색합니다.")
     order = st.radio("정렬 기준", ["유찰 건수 많은 순", "유찰률 높은 순"], horizontal=True)
     tabs = st.tabs(["기관그룹", "계약방법", "사업유형"])
+    
     for tab, col in zip(tabs, ["기관그룹", "계약방법", "사업유형"]):
         with tab:
             summary = group_summary(data, col)
@@ -133,17 +134,28 @@ def render():
                 st.info("결과확정 공고가 없습니다.")
                 continue
             sort_col = "유찰 공고 수" if order == "유찰 건수 많은 순" else "유찰률(%)"
+            
             summary = summary.sort_values([sort_col, "결과확정 공고 수"], ascending=False)
-            fig = px.bar(summary, x=col, y=sort_col, hover_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"])
+            fig = px.bar(summary, x=col, y=sort_col, hover_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"], color_discrete_sequence=["#4C78A8"])
+            unit = "건" if sort_col == "유찰 공고 수" else "%"
+            
+            fig.update_layout(
+                title=f"{col}별 {sort_col.replace('(%)', '')} (단위: {unit})",
+                xaxis_title=None,
+                yaxis_title=None,
+            )
+            
             st.plotly_chart(fig, use_container_width=True)
             count_leader = summary.sort_values("유찰 공고 수", ascending=False).iloc[0]
             total_failed = int(confirmed["failed"].sum())
             leader_failed = int(count_leader["유찰 공고 수"])
             share = leader_failed / total_failed * 100 if total_failed else 0
+            
             st.info(
                 f"{col}별 유찰 건수가 가장 많은 그룹은 '{count_leader[col]}'입니다. "
                 f"유찰 {leader_failed:,}건으로 선택한 범위의 전체 유찰 "
                 f"{total_failed:,}건 중 {share:.1f}%를 차지합니다."
             )
+            
             st.dataframe(summary, hide_index=True, use_container_width=True,
                          column_config={"유찰률(%)": st.column_config.NumberColumn(format="%.2f%%")})
