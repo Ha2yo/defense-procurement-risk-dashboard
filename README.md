@@ -52,51 +52,50 @@ API_KEY_DATA_PORTAL=...
 
 ## 실행 순서
 
+프로젝트 루트에서 `python scripts/<폴더>/<파일>` 형태로, 표의 위에서부터 순서대로 실행한다. 결과 경로는 `data/` 아래 기준이다.
+
 ### ① 데이터 수집 — `scripts/collection/`
-| 명령 | 내용 | 결과 |
-|---|---|---|
-| `python scripts/collection/collect_data_plan.py` | 조달계획 | `data/raw/` |
-| `python scripts/collection/collect_data_list.py` | 입찰공고·입찰결과 | `data/raw/` |
-| `python scripts/collection/collect_data_contract.py` | 계약정보 | `data/raw/` |
-| `python scripts/collection/collect_data_item.py` | 품목명세서 | `data/raw/` |
+| 파일 | 내용 → 결과 |
+|---|---|
+| `collect_data_plan.py` | 조달계획 → `raw/` |
+| `collect_data_list.py` | 입찰공고·입찰결과 → `raw/` |
+| `collect_data_contract.py` | 계약정보 → `raw/` |
+| `collect_data_item.py` | 품목명세서 → `raw/` |
 
 ### ② 정제·병합 — `scripts/preprocessing/`
-| 명령 | 내용 | 결과 |
-|---|---|---|
-| `python scripts/preprocessing/raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) | `data/clean/` |
-| `python scripts/preprocessing/merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 | `data/kpi/bid_master_2021_2025.csv` |
-| `python scripts/preprocessing/restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 | `data/analysis/contract_year_independent/` |
-| `python scripts/preprocessing/check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) | `data/analysis/item_amount_check/` |
+| 파일 | 내용 → 결과 |
+|---|---|
+| `raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) → `clean/` |
+| `merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 → `kpi/bid_master_2021_2025.csv` |
+| `restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 → `analysis/contract_year_independent/` |
+| `check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) → `analysis/item_amount_check/` |
 
 ### ③ 기관그룹 분류 — `scripts/ornt/`
-| 명령 | 내용 | 결과 |
-|---|---|---|
-| `python scripts/ornt/orntCode_unique.py` | 기관코드 기준 기관 목록(226개) | `data/analysis/ornt_code/orntCode_unique.csv` |
-| `python scripts/ornt/compare_ornt_codeVld4.py` | **기관그룹 분류 기준표** (품목명세서 소요군 분포를 근거로 함께 집계, `data/raw/` 품목명세서 필요) | `data/analysis/ornt_code/orntCode_codeVld4_all.csv` |
-| `python scripts/ornt/collect_ornt_item_sample.py` | (참고) 기관별 공고 1건의 품목명세서 표본 수집 | `data/analysis/ornt_code/orntCode_codeVld4.csv` |
+| 파일 | 내용 → 결과 |
+|---|---|
+| `orntCode_unique.py` | 기관코드 기준 기관 목록(226개) → `analysis/ornt_code/` |
+| `compare_ornt_codeVld4.py` | **기관그룹 분류 기준표** `orntCode_codeVld4_all.csv` (품목명세서 소요군 분포를 근거로 집계, `data/raw/` 품목명세서 필요) → `analysis/ornt_code/` |
+| `collect_ornt_item_sample.py` | (참고) 기관별 공고 1건의 품목명세서 표본 수집 → `analysis/ornt_code/` |
 
-### ④ 분석 — `scripts/analysis/`
-| 분석 계획표 | 명령 | 결과 |
-|---|---|---|
-| 사전 점검: 연도별 결과 미확인 | `python scripts/analysis/00_unconfirmed_by_year.py` | `data/analysis/unconfirmed_by_year.csv` |
-| 1. 기관·계약방법·사업구분 (1단계) | `python scripts/analysis/01_bid_conditions_prepare.py` | `data/analysis/analysis_master_2021_2023.csv` |
-| 1. 기관·계약방법·사업구분 (2단계) | `python scripts/analysis/01_bid_conditions_analysis.py` | `data/analysis/results/` |
-| 2. 공고기간 (1단계) | `python scripts/analysis/02_bid_period_preprocess.py` | `data/analysis/bid_period/bid_period_preprocessed.csv` |
-| 2. 공고기간 (2단계) | `python scripts/analysis/02_bid_period_analysis.py` | `data/analysis/bid_period/` |
-| 2. 공고기간 (3단계) | `python scripts/analysis/02_bid_period_year_compare.py` | `data/analysis/bid_period/year_comparison/` |
-| 3. 금액 구간 (사업규모금액 5분위) | `python scripts/analysis/03_bid_amount_analysis.py` | `data/analysis/bid_amount/` |
-| 4. 공고 시기 | `python scripts/analysis/04_bid_timing_analysis.py` | `data/analysis/bid_timing/` |
-| 5. 유찰 후 재공고 | `python scripts/analysis/05_rebid_followup_analysis.py` ([가이드](docs/05_rebid_followup_guide.md)) | `data/analysis/a5_output_project/` (요약: `data/analysis/rebid_followup/`) |
+### ④ 분석 — `scripts/analysis/` (파일명 앞 번호 = 분석 계획표 번호)
+| 분석 계획표 | 파일 (실행 순서) → 결과 |
+|---|---|
+| 사전 점검: 연도별 결과 미확인 | `00_unconfirmed_by_year.py` → `analysis/unconfirmed_by_year.csv` |
+| 1. 기관·계약방법·사업구분 | `01_bid_conditions_prepare.py` → `01_bid_conditions_analysis.py` → `analysis/results/` |
+| 2. 공고기간 | `02_bid_period_preprocess.py` → `02_bid_period_analysis.py` → `02_bid_period_year_compare.py` → `analysis/bid_period/` |
+| 3. 금액 구간 (사업규모금액 5분위) | `03_bid_amount_analysis.py` → `analysis/bid_amount/` |
+| 4. 공고 시기 | `04_bid_timing_analysis.py` → `analysis/bid_timing/` |
+| 5. 유찰 후 재공고 ([가이드](docs/05_rebid_followup_guide.md)) | `05_rebid_followup_analysis.py` → `analysis/a5_output_project/` (요약: `analysis/rebid_followup/`) |
 
 ### ⑤ 위험도·KPI (분석 계획표 6번) — `scripts/kpi/`
 공식 위험도 = 2021~2023년 결과확정 경쟁성 공고의 **기관그룹 × 계약방법 × 사업구분 × 사업규모금액 5분위** 조합별 유찰률
 (10건 미만이거나 금액 미확인이면 상위 조합으로 대체). 2024년 예비 검증, 2025년 최종 평가.
 
-| 순서 | 명령 | 내용 | 결과 |
-|---|---|---|---|
-| 1 | `python scripts/kpi/kpi_2024_validation.py` | 공식 4변수 위험도 산정, 2024년 KPI 1(상위 20% 사전 식별률)·KPI 2(10분위 스피어만) | `data/kpi/kpi_validation/` |
-| 2 | `python scripts/kpi/kpi_rolling_pattern_2022_2025.py` | 반기·연간 안정성, 동점 민감도 | `data/kpi/rolling_validation/` |
-| 3 | `python scripts/kpi/kpi_statistical_validation.py --reps 2000 --seed 2026` | 사업키 군집 부트스트랩 95% 신뢰구간 (2번 결과 필요) | `data/kpi/statistical_validation/` |
+| 파일 | 내용 → 결과 |
+|---|---|
+| `kpi_2024_validation.py` | 공식 4변수 위험도 산정, 2024년 KPI 1(상위 20% 사전 식별률)·KPI 2(10분위 스피어만) → `kpi/kpi_validation/` |
+| `kpi_rolling_pattern_2022_2025.py` | 반기·연간 안정성, 동점 민감도 → `kpi/rolling_validation/` |
+| `kpi_statistical_validation.py` | 사업키 군집 부트스트랩 95% 신뢰구간 (위 결과 필요, 실행 옵션 `--reps 2000 --seed 2026`) → `kpi/statistical_validation/` |
 
 ### ⑥ 대시보드 — `scripts/dashboard/`
 `streamlit run app.py` · 화면: 전체 유찰 현황 / 공고별 위험도·유사사례 / 유찰 요인 분석 / 유찰 후 지연 영향
