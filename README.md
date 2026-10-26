@@ -1,6 +1,6 @@
 # 군수품 조달 유찰 위험 예측 대시보드 구축을 통한 조달 효율성 향상
 
-방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·계약정보·품목명세서, 2021~2025)를 이용해
+방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·품목명세서, 2021~2025)를 이용해
 신규 입찰공고의 유찰 위험을 사전에 식별하고, 과거 유사 공고를 빠르게 검토할 수 있는 Streamlit 대시보드를 만든다.
 
 기준 문서: 프로젝트 정의서 · 데이터 항목정의서 · KPI 정의서 · 분석 계획표 · 잠재원인 우선순위표 · 연도별 결과 미확인 분포표
@@ -59,15 +59,15 @@ API_KEY_DATA_PORTAL=...
 |---|---|
 | `collect_data_plan.py` | 조달계획 → `raw/` |
 | `collect_data_list.py` | 입찰공고·입찰결과 → `raw/` |
-| `collect_data_contract.py` | 계약정보 → `raw/` |
+| `collect_data_contract.py` | 계약정보(별도 계약 연결 검증 시에만 수집) → `raw/` |
 | `collect_data_item.py` | 품목명세서 → `raw/` |
 
 ### ② 정제·병합 — `scripts/preprocessing/`
 | 파일 | 내용 → 결과 |
 |---|---|
-| `raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) → `clean/` |
+| `raw_to_clean.py` | 계획·공고·결과·품목명세 RAW → CLEAN. 계약정보는 기본 제외 (`INCLUDE_CONTRACT=1`에서만 별도 정제) → `clean/` |
 | `merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 → `kpi/bid_master_2021_2025.csv` |
-| `restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 → `analysis/contract_year_independent/` |
+| `restore_contract_demand_year.py` | **후속 검증 전용**: 계약정보 요구연도 복원 및 계약 후보 연결 → `analysis/contract_year_independent/` (KPI·화면에서는 사용하지 않음) |
 | `check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) → `analysis/item_amount_check/` |
 
 ### ③ 기관그룹 분류 — `scripts/ornt/`
@@ -100,6 +100,10 @@ API_KEY_DATA_PORTAL=...
 ### ⑥ 대시보드 — `scripts/dashboard/`
 `streamlit run app.py` · 화면: 전체 유찰 현황 / 공고별 위험도·유사사례 / 유찰 요인 분석 / 유찰 후 지연 영향
 입력은 `data/dashboard/*.parquet`와 `data/analysis/ornt_code/orntCode_codeVld4_all.csv`.
+
+**계약정보 분리:** KPI 및 화면 1~4는 `contract_info`를 로드하지 않습니다. `data/dashboard/contract_info.parquet`는 현재 화면에서 사용하지 않는 기존 파일로, Git 추적 여부를 확인한 후 별도 커밋에서 제거할 수 있습니다. 기존 계약정보 원본·정제파일과 `restore_contract_demand_year.py`는 후속 분석 재현을 위해 보관합니다.
+
+**계약 연계 연구를 재현하려면** PowerShell에서 `$env:INCLUDE_CONTRACT="1"; python scripts/preprocessing/raw_to_clean.py`를 실행하고, 종료 후 `$env:INCLUDE_CONTRACT="0"`으로 돌립니다.
 
 ---
 

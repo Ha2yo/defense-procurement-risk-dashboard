@@ -11,10 +11,15 @@ import pandas as pd
 DATE_BEGIN = "20210101"
 DATE_END = "20251231"
 
-# 이 .py 파일이 있는 위치를 기준으로 data/raw, data/clean 사용
+# 핵심 CLEAN 4종(계획·공고·결과·품목)은 계약정보 없이 처리합니다.
+# 계약정보 매칭 연구를 재현할 때만 INCLUDE_CONTRACT=1로 별도 실행하세요.
+INCLUDE_CONTRACT = os.environ.get("INCLUDE_CONTRACT", "0").lower() in {"1", "true", "yes"}
+
+# scripts/preprocessing/raw_to_clean.py 위치에서 프로젝트 루트로 두 단계 이동
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RAW_DIR = os.path.join(BASE_DIR, "../..", "data", "raw")
-CLEAN_DIR = os.path.join(BASE_DIR, "../..", "data", "clean")
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
+RAW_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
+CLEAN_DIR = os.path.join(PROJECT_ROOT, "data", "clean")
 
 os.makedirs(CLEAN_DIR, exist_ok=True)
 
@@ -113,7 +118,9 @@ print("=" * 70)
 plan = read_raw_csv(PLAN_RAW_PATH, "조달계획")
 notice = read_raw_csv(NOTICE_RAW_PATH, "입찰공고")
 result = read_raw_csv(RESULT_RAW_PATH, "입찰결과")
-contract = read_raw_csv(CONTRACT_RAW_PATH, "계약정보")
+contract = read_raw_csv(CONTRACT_RAW_PATH, "계약정보") if INCLUDE_CONTRACT else None
+if not INCLUDE_CONTRACT:
+    print("계약정보: 핵심 CLEAN 생성에서 제외 (INCLUDE_CONTRACT=1로만 활성화)")
 
 # 품목명세서 RAW가 없는 환경에서는 기존 4개 데이터만 정제한다.
 if os.path.exists(ITEM_RAW_PATH):
@@ -163,7 +170,8 @@ def clean_string_columns(df):
 plan = clean_string_columns(plan)
 notice = clean_string_columns(notice)
 result = clean_string_columns(result)
-contract = clean_string_columns(contract)
+if contract is not None:
+    contract = clean_string_columns(contract)
 
 if item is not None:
     item = clean_string_columns(item)
@@ -172,7 +180,8 @@ if item is not None:
 PLAN_ORIGINAL_COLUMNS = plan.columns.tolist()
 NOTICE_ORIGINAL_COLUMNS = notice.columns.tolist()
 RESULT_ORIGINAL_COLUMNS = result.columns.tolist()
-CONTRACT_ORIGINAL_COLUMNS = contract.columns.tolist()
+if contract is not None:
+    CONTRACT_ORIGINAL_COLUMNS = contract.columns.tolist()
 
 if item is not None:
     ITEM_ORIGINAL_COLUMNS = item.columns.tolist()
@@ -211,7 +220,8 @@ print("=" * 70)
 plan = remove_exact_duplicates(plan, "조달계획")
 notice = remove_exact_duplicates(notice, "입찰공고")
 result = remove_exact_duplicates(result, "입찰결과")
-contract = remove_exact_duplicates(contract, "계약정보")
+if contract is not None:
+    contract = remove_exact_duplicates(contract, "계약정보")
 
 if item is not None:
     item = remove_exact_duplicates(item, "품목명세서")
@@ -360,11 +370,12 @@ result = make_key(
 # ------------------------------------------------------------
 # 계약정보: 원본 + contractLinkKey
 # ------------------------------------------------------------
-contract = make_key(
-    contract,
-    CONTRACT_LINK_KEY_COLUMNS,
-    "contractLinkKey",
-)
+if contract is not None:
+    contract = make_key(
+        contract,
+        CONTRACT_LINK_KEY_COLUMNS,
+        "contractLinkKey",
+    )
 
 
 # ------------------------------------------------------------
@@ -451,12 +462,13 @@ validate_columns(
     "입찰결과",
 )
 
-validate_columns(
-    contract,
-    CONTRACT_ORIGINAL_COLUMNS,
-    ["contractLinkKey"],
-    "계약정보",
-)
+if contract is not None:
+    validate_columns(
+        contract,
+        CONTRACT_ORIGINAL_COLUMNS,
+        ["contractLinkKey"],
+        "계약정보",
+    )
 
 if item is not None:
     validate_columns(
@@ -499,7 +511,8 @@ print_key_summary(result, "businessKey", "입찰결과")
 print_key_summary(result, "noticeKey", "입찰결과")
 print_key_summary(result, "contractLinkKey", "입찰결과")
 
-print_key_summary(contract, "contractLinkKey", "계약정보")
+if contract is not None:
+    print_key_summary(contract, "contractLinkKey", "계약정보")
 
 if item is not None:
     print_key_summary(item, "businessKey", "품목명세서")
@@ -527,11 +540,12 @@ result.to_csv(
     encoding="utf-8-sig",
 )
 
-contract.to_csv(
-    CONTRACT_CLEAN_PATH,
-    index=False,
-    encoding="utf-8-sig",
-)
+if contract is not None:
+    contract.to_csv(
+        CONTRACT_CLEAN_PATH,
+        index=False,
+        encoding="utf-8-sig",
+    )
 
 if item is not None:
     item.to_csv(
@@ -561,10 +575,11 @@ print(
     f"{len(result.columns)}개 컬럼\n{RESULT_CLEAN_PATH}"
 )
 
-print(
-    f"계약정보 : {len(contract):,}행 / "
-    f"{len(contract.columns)}개 컬럼\n{CONTRACT_CLEAN_PATH}"
-)
+if contract is not None:
+    print(
+        f"계약정보 : {len(contract):,}행 / "
+        f"{len(contract.columns)}개 컬럼\n{CONTRACT_CLEAN_PATH}"
+    )
 
 if item is not None:
     print(
