@@ -369,7 +369,8 @@ def summarize(data, order=None):
     if order:
         table = table.reindex([c for c in order if c in table.index])
     else:
-        table = table.loc[table.sum(axis=1).sort_values(ascending=False).index]
+        rate = table[1] / table.sum(axis=1)
+        table = table.loc[rate.sort_values(ascending=False).index]
         if ETC in table.index:
             table = pd.concat([table.drop(ETC), table.loc[[ETC]]])
     summary = pd.DataFrame({
@@ -406,32 +407,52 @@ def format_p(p):
 # ============================================================
 
 def rate_chart(summary, overall_rate):
-    height = max(220, 46 * len(summary))
     chart_df = pd.DataFrame({
         "category": summary["범주"],
         "n": summary["공고 수"],
         "fails": summary["유찰"],
         "rate": summary["유찰률(%)"],
     })
+    is_etc = chart_df["category"].eq(ETC)
+    top = chart_df.loc[~is_etc, "rate"].max() 
+    chart_df["강조"] = np.select(
+        [is_etc, chart_df["rate"].eq(top)],
+        ["기타", "최고"],
+        default="일반",
+    )
+    
     chart_df["label"] = [f"{r:.1f}%  (n={n:,})" for r, n in zip(chart_df["rate"], chart_df["n"])]
 
     base = alt.Chart(chart_df).encode(
         y=alt.Y("category:N", sort=list(chart_df["category"]), title=None, axis=alt.Axis(labelLimit=220)),
     )
-    bars = base.mark_bar(color="#4C78A8", cornerRadiusEnd=3).encode(
-        x=alt.X("rate:Q", title="유찰률(%)", scale=alt.Scale(domain=[0, 100])),
+    bars = base.mark_bar(cornerRadiusEnd=3).encode(
+        x=alt.X("rate:Q", title="유찰률(%)", scale=alt.Scale(domain=[0, chart_df["rate"].max() + 5])),
         tooltip=[
             alt.Tooltip("category:N", title="범주"),
             alt.Tooltip("n:Q", title="공고 수", format=","),
             alt.Tooltip("fails:Q", title="유찰 수", format=","),
             alt.Tooltip("rate:Q", title="유찰률(%)", format=".2f"),
         ],
+        color=alt.Color("강조:N",
+                        scale=alt.Scale(domain=["일반", "최고", "기타"], range=["#B7C6D9", "#2F5D8C", "#D3D3D3"]),
+                        legend=None),
     )
-    labels = base.mark_text(align="left", dx=4, fontSize=12).encode(x="rate:Q", text="label:N")
+    label_enc = dict(x="rate:Q", text="label:N")
+    halo = base.mark_text(align="left", dx=4, fontSize=12,
+                          stroke="white", strokeWidth=4, strokeJoin="round").encode(**label_enc)
+    
+    labels = base.mark_text(align="left", dx=4, fontSize=12).encode(**label_enc)
+    
+    overall_df = pd.DataFrame({"x": [overall_rate], "text": [f"전체 {overall_rate:.2f}%"]})
     overall = alt.Chart(pd.DataFrame({"x": [overall_rate]})).mark_rule(
-        color="#E45756", strokeDash=[4, 4]
+        color="#E45756", strokeDash=[4, 4], strokeWidth=2.5
     ).encode(x="x:Q", tooltip=[alt.Tooltip("x:Q", title="전체 유찰률(%)", format=".2f")])
-    return (bars + labels + overall).properties(height=height)
+    overall_label = alt.Chart(overall_df).mark_text(
+        color="#C0392B", fontWeight="bold", fontSize=12, baseline="bottom", dy=-4
+    ).encode(x="x:Q", y=alt.value(0), text="text:N")
+    
+    return (bars + overall + halo + labels + overall_label).properties(height=alt.Step(46))
 
 
 def crosstab_view(summary):
@@ -561,7 +582,11 @@ def render():
         st.subheader(f"{factor}별 유찰률")
         st.caption(md_safe(" · ".join([f"기간: {period}", "막대 = 범주별 유찰률, 빨간 점선 = 전체 유찰률", *notes[1:]])))
         st.altair_chart(rate_chart(summary, overall_rate), use_container_width=True)
-
+        
+        if factor == "계약·경쟁방식" and (summary["범주"] == ETC).any():
+            st.caption(f"기타 = 공고 {MIN_CATEGORY_SIZE}건 미만 계약방식 묶음. "
+                       "표본이 작고 여러 방식이 섞여 있어 순위 비교에서 제외하고 맨 아래에 표시합니다.")
+    
     tab1, tab2 = st.tabs(["교차표", "통계 검정 해석"])
     with tab1:
         with st.container(border=True):
