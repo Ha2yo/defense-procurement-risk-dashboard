@@ -6,7 +6,10 @@ COLOR_BASE = "#B7C6D9"       # 강조 차트의 일반 막대
 COLOR_HIGHLIGHT = "#2F5D8C"  # 강조 막대 (최댓값)
 COLOR_MUTED = "#D3D3D3"      # 순위 비교에서 뺀 범주 (예: 기타)
 COLOR_REFERENCE = "#C0392B"  # 전체 평균·중앙값 기준선
+COLOR_TEXT = "#1F2937"       # 막대 옆 숫자 글자색
 BAR_STEP = 46                # 가로 막대 한 칸 높이(px)
+# 기준선이 글자를 지나가도 읽히도록 글자 둘레에 두르는 흰 테두리(halo)
+TEXT_HALO = "0 0 3px white, 0 0 3px white, 0 0 3px white"
 
 
 def style_figure(fig, height):
@@ -19,7 +22,11 @@ def style_figure(fig, height):
         font=dict(size=13),
         hoverlabel=dict(font_size=13),
     )
-    fig.update_traces(cliponaxis=False, selector=dict(type="bar"))
+    fig.update_traces(
+        cliponaxis=False,
+        textfont=dict(color=COLOR_TEXT, size=13, shadow=TEXT_HALO),
+        selector=dict(type="bar"),
+    )
     return fig
 
 
@@ -43,6 +50,5 @@ def content_placeholder(title, description, height=190):
 
 def source_note():
     st.caption(
-        "자료 범위: 2021~2025년 군수품 조달자료 · "
-        "유찰은 공고(noticeKey) 단위 · 결과 미확인/판단보류/수의계약은 유찰률에서 제외"
+        "유찰은 공고키(noticeKey) 단위 · 결과 미확인/판단보류/수의계약은 유찰률에서 제외"
     )

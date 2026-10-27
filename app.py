@@ -25,12 +25,11 @@ PAGES = {
 # 2. 사이드바 / 화면 이동
 # ============================================================
 st.sidebar.title("군수품 조달 분석")
-st.sidebar.caption("2021~2025년 · 화면 설계 시안")
+st.sidebar.caption("데이터 기간: 2021.01.01 ~ 2025.12.31")
 
+st.sidebar.divider()
 page = st.sidebar.radio("화면 선택", list(PAGES.keys()))
 st.sidebar.divider()
-st.sidebar.info("현재는 화면 구성 단계입니다. CLEAN/분석 데이터는 연결하지 않았습니다.")
-
 
 # ============================================================
 # 3. 선택 화면 출력

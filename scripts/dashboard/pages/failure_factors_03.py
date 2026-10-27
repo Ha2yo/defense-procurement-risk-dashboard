@@ -292,18 +292,26 @@ def exclude_private_contracts(df):
 
 
 def factor_frame(df, factor):
-    """선택 변수의 범주값과 fail만 남기고, 제외 건수를 함께 돌려줍니다."""
+    """선택 변수의 범주값과 fail만 남기고, 제외 건수와 소표본 묶음 정보를 함께 돌려줍니다.
+
+    소표본 묶음: 공고 30건 미만 계약방식. 하나뿐이면 그 방식 이름을, 둘 이상이면 '기타'를 이름으로 쓴다.
+    반환: (data, 제외 건수, 묶음 이름 또는 None, {묶인 방식: 공고 수})
+    """
     col = FACTOR_COLUMNS[factor]
     data = df[[col, "fail"]].rename(columns={col: "category"})
     excluded = int(data["category"].isna().sum())
     data = data.dropna(subset=["category"]).copy()
     data["category"] = data["category"].astype(str)
 
+    small_label, small_members = None, {}
     if factor == "계약·경쟁방식":
         counts = data["category"].value_counts()
-        small = counts[counts < MIN_CATEGORY_SIZE].index
-        data.loc[data["category"].isin(small), "category"] = ETC
-    return data, excluded
+        small = counts[counts < MIN_CATEGORY_SIZE]
+        if len(small):
+            small_members = small.to_dict()
+            small_label = small.index[0] if len(small) == 1 else ETC
+            data.loc[data["category"].isin(small.index), "category"] = small_label
+    return data, excluded, small_label, small_members
 
 
 # ============================================================
@@ -363,7 +371,7 @@ def chi_square_test(table):
     }
 
 
-def summarize(data, order=None):
+def summarize(data, order=None, small_label=None):
     """범주별 공고 수·유찰 수·유찰률 요약표와 교차표."""
     table = pd.crosstab(data["category"], data["fail"]).reindex(columns=[0, 1], fill_value=0)
     if order:
@@ -371,8 +379,8 @@ def summarize(data, order=None):
     else:
         rate = table[1] / table.sum(axis=1)
         table = table.loc[rate.sort_values(ascending=False).index]
-        if ETC in table.index:
-            table = pd.concat([table.drop(ETC), table.loc[[ETC]]])
+        if small_label in table.index:  # 소표본 묶음은 순위와 상관없이 맨 아래
+            table = pd.concat([table.drop(small_label), table.loc[[small_label]]])
     summary = pd.DataFrame({
         "범주": table.index.astype(str),
         "비유찰": table[0].to_numpy(),
@@ -406,14 +414,14 @@ def format_p(p):
 # 4. 화면 요소
 # ============================================================
 
-def rate_chart(summary, overall_rate):
+def rate_chart(summary, overall_rate, small_label=None):
     chart_df = pd.DataFrame({
         "category": summary["범주"],
         "n": summary["공고 수"],
         "fails": summary["유찰"],
         "rate": summary["유찰률(%)"],
     })
-    is_etc = chart_df["category"].eq(ETC)
+    is_etc = chart_df["category"].eq(small_label)  # 소표본 묶음: 회색, 강조 제외
     top = chart_df.loc[~is_etc, "rate"].max() 
     chart_df["강조"] = np.select(
         [is_etc, chart_df["rate"].eq(top)],
@@ -422,27 +430,87 @@ def rate_chart(summary, overall_rate):
     )
     
     chart_df["label"] = [f"{r:.1f}%  (n={n:,})" for r, n in zip(chart_df["rate"], chart_df["n"])]
+    # x축은 비교 대상(소표본 제외) 최댓값 + 5. 소표본 값이 훨씬 크면 축을 둘로 나눠 중간을 생략한다
+    axis_max, broken = axis_limit(summary, small_label)
+    if broken:
+        # 왼쪽 축에서는 소표본 막대를 축 끝까지만 그리고 숫자는 오른쪽 축 막대에 붙인다
+        is_cut = chart_df["category"].eq(small_label)
+        chart_df["bar"] = chart_df["rate"].where(~is_cut, axis_max)
+        cut_row = chart_df[is_cut].iloc[0]
+        chart_df.loc[is_cut, "label"] = ""
+    else:
+        chart_df["bar"] = chart_df["rate"]
 
     fig = px.bar(
-        chart_df, x="rate", y="category", orientation="h", color="강조", text="label",
+        chart_df, x="bar", y="category", orientation="h", color="강조", text="label",
         color_discrete_map={"일반": ui.COLOR_BASE, "최고": ui.COLOR_HIGHLIGHT, "기타": ui.COLOR_MUTED},
-        custom_data=["n", "fails"],
+        custom_data=["n", "fails", "rate"],
     )
     fig.update_traces(
         textposition="outside",
         hovertemplate="%{y}<br>공고 수 %{customdata[0]:,}건 · 유찰 %{customdata[1]:,}건"
-                      "<br>유찰률 %{x:.2f}%<extra></extra>",
+                      "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>",
     )
     # 가로 막대는 아래에서 위로 그려지므로 요약표 순서를 뒤집어 첫 범주가 맨 위에 오게 한다
     fig.update_yaxes(title=None, categoryorder="array", categoryarray=list(chart_df["category"])[::-1])
-    fig.update_xaxes(title="유찰률(%)", range=[0, chart_df["rate"].max() + 5])
+    fig.update_xaxes(title="유찰률(%)", range=[0, axis_max])
     # 전체 유찰률 기준선: 막대 뒤(layer="below")에 그리고 값은 선 위쪽에 직접 표시
     fig.add_vline(
         x=overall_rate, line_dash="dash", line_color=ui.COLOR_REFERENCE, line_width=2.5, layer="below",
         annotation_text=f"전체 {overall_rate:.2f}%", annotation_position="top",
         annotation_font=dict(color=ui.COLOR_REFERENCE, size=12),
     )
+    if broken:
+        # 오른쪽 좁은 축: 소표본 값 근처 구간만 보여 주고, 막대는 그 구간 시작점부터 실제 값까지
+        lo, hi = broken
+        fig.add_bar(
+            y=[cut_row["category"]], x=[cut_row["rate"] - lo], base=[lo], orientation="h", xaxis="x2",
+            marker_color=ui.COLOR_MUTED, text=[f"{cut_row['rate']:.1f}%  (n={cut_row['n']:,})"],
+            textposition="outside", customdata=[[cut_row["n"], cut_row["fails"], cut_row["rate"]]],
+            hovertemplate="%{y}<br>공고 수 %{customdata[0]:,}건 · 유찰 %{customdata[1]:,}건"
+                          "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>",
+        )
+        # 두 축의 1%당 길이가 같도록 차트 폭을 각 축의 구간 길이에 비례해 나눈다
+        left_end = (1 - BREAK_GAP) * axis_max / (axis_max + hi - lo)
+        right_start = left_end + BREAK_GAP
+        fig.update_layout(
+            xaxis=dict(domain=[0, left_end], dtick=5),
+            xaxis2=dict(domain=[right_start, 1], range=[lo, hi], anchor="y", dtick=5),
+        )
+        # 생략 표시: 두 축 사이를 물결 모양 흰 틈으로 이어 막대가 끊긴 것을 보여 준다 (y는 아래에서부터 센 범주 위치)
+        y_pos = len(chart_df) - 1 - int(np.flatnonzero(chart_df["category"].eq(small_label))[0])
+        fig.add_shape(type="path", xref="paper", yref="y", fillcolor="white", line=dict(width=0),
+                      layer="above", path=wave_gap_path(left_end - 0.004, y_pos, BREAK_GAP + 0.008, 0.003))
     return ui.style_figure(fig, ui.hbar_height(len(chart_df)))
+
+
+BREAK_GAP = 0.04  # 축을 나눌 때 두 축 사이 틈(차트 폭 비율)
+
+
+def axis_limit(summary, small_label):
+    """왼쪽 x축 끝(비교 대상 최댓값 + 5)과, 소표본 값이 그보다 훨씬 클 때 오른쪽 축 구간 (없으면 None).
+
+    오른쪽 축은 소표본 값 바로 아래 5 단위 눈금에서 한 칸 더 내려 시작하고 15만큼 보여 준다
+    (예: 66.7% → 60~75). 그 시작점이 왼쪽 축 끝보다 작으면 축을 나누지 않고 값까지 늘린다.
+    """
+    ranked = summary.loc[summary["범주"].ne(small_label), "유찰률(%)"]
+    top = ranked.max() if len(ranked) else summary["유찰률(%)"].max()
+    axis_max = top + 5
+    small = summary.loc[summary["범주"].eq(small_label), "유찰률(%)"]
+    if small.empty or small.iloc[0] <= axis_max:
+        return axis_max, None
+    lo = np.floor(small.iloc[0] / 5) * 5 - 5
+    if lo <= axis_max:
+        return small.iloc[0] + 5, None
+    return axis_max, (lo, lo + 15)
+
+
+def wave_gap_path(x0, y, width, amp, points=12):
+    """막대를 세로로 가로지르는 물결 모양 틈(두 물결선 사이를 채운 SVG 경로)."""
+    ys = [y - 0.5 + i / points for i in range(points + 1)]
+    left = [(x0 + amp * np.sin(2 * np.pi * 2 * i / points), yy) for i, yy in enumerate(ys)]
+    right = [(x + width, yy) for x, yy in reversed(left)]
+    return "M " + " L ".join(f"{x:.3f},{yy:.3f}" for x, yy in left + right) + " Z"
 
 
 def crosstab_view(summary):
@@ -459,33 +527,35 @@ def crosstab_view(summary):
     ]
 
 
-def interpretation(factor, period, summary, stats, overall_rate):
+def interpretation(factor, period, summary, stats, overall_rate, small_label=None):
     lines = []
     if stats["p_value"] < ALPHA:
         lines.append(
             f"- **유의성**: p-value {format_p(stats['p_value'])} (< {ALPHA}) → "
-            f"{period} 공고에서 **{factor}에 따라 유찰률이 통계적으로 다릅니다.**"
+            f"{period} 공고에서 **{factor}에 따라 유찰률이 통계적으로 다릅니다**"
         )
     else:
         lines.append(
             f"- **유의성**: p-value {format_p(stats['p_value'])} (≥ {ALPHA}) → "
-            f"{factor}에 따른 유찰률 차이가 통계적으로 확인되지 않습니다."
+            f"{factor}에 따른 유찰률 차이가 통계적으로 확인되지 않습니다"
         )
     lines.append(
         f"- **연관성 크기**: Cramér's V {stats['cramers_v']:.3f} → **{strength_label(stats['cramers_v'])}** "
         "(기준: 0.1 미만 매우 약함 · 0.1~0.3 약함 · 0.3~0.5 중간 · 0.5 이상 강함)"
     )
-    hi = summary.loc[summary["유찰률(%)"].idxmax()]
-    lo = summary.loc[summary["유찰률(%)"].idxmin()]
+    ranked = summary.loc[summary["범주"].ne(small_label)]  # 소표본 묶음은 최고·최저 비교에서 제외
+    ranked = ranked if len(ranked) else summary
+    hi = ranked.loc[ranked["유찰률(%)"].idxmax()]
+    lo = ranked.loc[ranked["유찰률(%)"].idxmin()]
     lines.append(
         f"- **범주 비교**: 유찰률이 가장 높은 범주는 **{hi['범주']}** {hi['유찰률(%)']:.1f}% "
         f"(n={hi['공고 수']:,}), 가장 낮은 범주는 **{lo['범주']}** {lo['유찰률(%)']:.1f}% "
-        f"(n={lo['공고 수']:,})입니다. 전체 유찰률은 {overall_rate:.2f}%입니다."
+        f"(n={lo['공고 수']:,})입니다. 전체 유찰률은 {overall_rate:.2f}%입니다"
     )
     if stats["p_value"] < ALPHA and stats["cramers_v"] < 0.1:
         lines.append(
             "- 표본이 커서 작은 차이도 유의하게 나올 수 있습니다. "
-            "p-value보다 Cramér's V와 범주별 유찰률 차이를 함께 보고 판단하세요."
+            "p-value보다 Cramér's V와 범주별 유찰률 차이를 함께 보고 판단하세요"
         )
     return "\n".join(lines)
 
@@ -496,7 +566,7 @@ def interpretation(factor, period, summary, stats, overall_rate):
 
 def render():
     st.title("유찰 요인 분석")
-    st.caption("공고 조건에 따라 유찰률이 어떻게 달라지는지 탐색합니다. 통계적 연관성과 인과관계는 구분합니다.")
+    st.caption("공고 조건에 따라 유찰률이 어떻게 달라지는지 탐색합니다. 통계적 연관성과 인과관계는 구분합니다")
     ui.source_note()
 
     c1, c2 = st.columns([2, 1])
@@ -537,12 +607,12 @@ def render():
                 "q": q, "basis": basis, "n_basis": n_basis,
                 "src": period_df.loc[period_df["사업규모금액"].isna(), "금액출처"].value_counts(),
             }
-        data, excluded = factor_frame(period_df, factor)
+        data, excluded, small_label, small_members = factor_frame(period_df, factor)
         if data.empty:
-            st.warning("선택한 조건에 해당하는 공고가 없습니다.")
+            st.warning("선택한 조건에 해당하는 공고가 없습니다")
             return
 
-        table, summary = summarize(data, order.get(factor))
+        table, summary = summarize(data, order.get(factor), small_label)
         overall_rate = data["fail"].mean() * 100
         stats = chi_square_test(table) if len(table) >= 2 else None
 
@@ -571,11 +641,32 @@ def render():
     with st.container(border=True):
         st.subheader(f"{factor}별 유찰률")
         st.caption(md_safe(" · ".join([f"기간: {period}", "막대 = 범주별 유찰률, 빨간 점선 = 전체 유찰률", *notes[1:]])))
-        st.plotly_chart(rate_chart(summary, overall_rate), use_container_width=True)
+        st.plotly_chart(rate_chart(summary, overall_rate, small_label), use_container_width=True)
         
-        if factor == "계약·경쟁방식" and (summary["범주"] == ETC).any():
-            st.caption(f"기타 = 공고 {MIN_CATEGORY_SIZE}건 미만 계약방식 묶음. "
-                       "표본이 작고 여러 방식이 섞여 있어 순위 비교에서 제외하고 맨 아래에 표시합니다.")
+        chart_notes = []
+        if factor in order:
+            # 순서가 있는 변수는 값 순 정렬 대신 원래 순서를 유지한다
+            chart_notes.append("구간에 순서가 있는 변수라 유찰률 값에 따라 정렬하지 않고 원래 순서 유지  \n"
+                               "구간이 바뀔 때 유찰률이 어떻게 변하는지 흐름을 보기 위해서입니다")
+        if small_label and (summary["범주"] == small_label).any():
+            reason = ("공고가 적어 유찰률이 크게 흔들리므로 순위 비교·강조에서 제외하고 "
+                      "회색으로 맨 아래에 표시합니다")
+            if small_label == ETC:
+                members = " · ".join(f"{k} {v:,}건" for k, v in small_members.items())
+                chart_notes.append(f"※ 기타 = 공고 {MIN_CATEGORY_SIZE}건 미만 계약방식 묶음 ({members}). {reason}")
+            else:
+                # 조사: 마지막 한글 글자에 받침이 있으면 '은', 없으면 '는' (예: 지명경쟁은, 2단계경쟁(분리)는)
+                last = next((ch for ch in reversed(small_label) if "가" <= ch <= "힣"), "")
+                josa = "은" if last and (ord(last) - ord("가")) % 28 else "는"
+                chart_notes.append(f"※ {small_label}{josa} 공고 {small_members[small_label]:,}건"
+                                   f"({MIN_CATEGORY_SIZE}건 미만)입니다. {reason}")
+            broken = axis_limit(summary, small_label)[1]
+            if broken:
+                small_rate = summary.loc[summary["범주"].eq(small_label), "유찰률(%)"].iloc[0]
+                chart_notes.append(f"※ {small_label} 유찰률({small_rate:.1f}%)이 다른 범주보다 훨씬 커서 "
+                                   f"x축을 나누고 중간을 생략(물결 표시)했습니다. 오른쪽 축은 {broken[0]:.0f}~{broken[1]:.0f}% 구간")
+        for note in chart_notes:
+            st.caption(md_safe(note))
     
     tab1, tab2 = st.tabs(["교차표", "통계 검정 해석"])
     with tab1:
@@ -595,30 +686,30 @@ def render():
             )
     with tab2:
         if stats is None:
-            st.warning("범주가 1개뿐이라 카이제곱 검정을 할 수 없습니다.")
+            st.warning("범주가 1개뿐이라 카이제곱 검정을 할 수 없습니다")
         else:
-            st.markdown(md_safe(interpretation(factor, period, summary, stats, overall_rate)))
+            st.markdown(md_safe(interpretation(factor, period, summary, stats, overall_rate, small_label)))
             st.caption(f"χ² = {stats['chi2']:,.2f}, 자유도 = {stats['dof']}, 최소 기대빈도 = {stats['min_expected']:.1f}")
             if stats["low_expected_ratio"] > 0:
                 st.warning(
                     f"기대빈도 5 미만인 칸이 {stats['low_expected_ratio']:.0%} 있어 "
-                    "카이제곱 결과가 불안정할 수 있습니다."
+                    "카이제곱 결과가 불안정할 수 있습니다"
                 )
-        st.info("p-value는 유의성 검정, Cramér's V는 연관성 크기 확인에 사용합니다. 이 값만으로 유찰의 원인이라고 단정하지 않습니다.")
+        st.info("p-value는 유의성 검정, Cramér's V는 연관성 크기 확인에 사용합니다. 이 값만으로 유찰의 원인이라고 단정하지 않습니다")
 
     if amount_info:
         with st.expander("사업규모금액 산정 기준"):
             q = amount_info["q"]
             st.markdown(md_safe(
                 "- 사업규모금액 = 총액제는 **계획예산**(없으면 품목합계), 단가제는 **품목합계**만 사용. "
-                "기초금액(`bsicExpt`)은 사용하지 않습니다.\n"
-                "- 입찰방법은 조달계획 `bidMth` 기준이며, 없을 때만 입찰결과로 복원합니다 (2025년 공고는 복원 안 함).\n"
-                "- 품목합계는 사업키별로 합산하며, 음수·결측 행이 하나라도 있거나 합계가 0이면 무효입니다.\n"
-                "- 총액제에서 |예산 − 품목합계| ÷ 예산 > 10%이면 금액을 보류합니다.\n"
+                "기초금액(`bsicExpt`)은 사용하지 않습니다\n"
+                "- 입찰방법은 조달계획 `bidMth` 기준이며, 없을 때만 입찰결과로 복원합니다 (2025년 공고는 복원 안 함)\n"
+                "- 품목합계는 사업키별로 합산하며, 음수·결측 행이 하나라도 있거나 합계가 0이면 무효입니다\n"
+                "- 총액제에서 |예산 − 품목합계| ÷ 예산 > 10%이면 금액을 보류합니다\n"
                 f"- 5분위 경계 ({period_label((amount_info['basis'][0], amount_info['basis'][-1]))}, "
                 "2025년 제외): " + " / ".join(f"{_format_won(v)}원" for v in q)
             ))
             if not amount_info["src"].empty:
                 st.caption("금액 미확인 사유: " + " · ".join(
                     f"{k} {v:,}건" for k, v in amount_info["src"].items()))
-            st.caption("금액을 구하지 못한 공고는 이 변수 분석에서만 빠지고, 다른 변수 분석과 위험도 산정에는 그대로 포함됩니다.")
+            st.caption("금액을 구하지 못한 공고는 이 변수 분석에서만 빠지고, 다른 변수 분석과 위험도 산정에는 그대로 포함됩니다")
