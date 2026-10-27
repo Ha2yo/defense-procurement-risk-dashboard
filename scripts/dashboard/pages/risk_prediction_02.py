@@ -45,7 +45,9 @@ RESULT_HELP = {
 RESULT_SHORT = {"동일사업_다른공고결과": "다른 공고 결과",
                 "결과미확인_후속있음": "미확인(후속 있음)",
                 "결과미확인_후속없음": "미확인(후속 없음)"}
-RESULT_COLORS = {"유찰": "#C0392B", "낙찰": "#1E8449", "순위확정": "#1E8449"}
+# 결과 색: 낙찰·순위확정(비유찰) 파랑, 유찰 빨강, 그 외 회색 (화면 4의 재공고 후 결과와 같은 기준)
+RESULT_COLORS = {"유찰": ui.COLOR_REFERENCE, "낙찰": ui.COLOR_HIGHLIGHT, "순위확정": ui.COLOR_HIGHLIGHT}
+RESULT_METRIC_COLORS = {"유찰": "red", "낙찰": "blue", "순위확정": "blue"}  # st.metric 값 색 (Streamlit 색 이름)
 FOLLOWUP_OBSERVATION_END = pd.Timestamp("2025-12-31")  # 5번 분석과 같은 관측 종료일
 
 
@@ -248,7 +250,7 @@ def prepare_amount_table(notices, plans, items, results):
 @st.cache_data(show_spinner="과거 공고·입찰결과를 연결하는 중입니다...")
 def load_prepared():
     notice_columns = [
-        "noticeKey", "businessKey", "pblancDate", "opengDt", "pblancNo", "pblancSe",
+        "noticeKey", "businessKey", "pblancDate", "opengDt", "pblancNo", "pblancOdr", "pblancSe",
         "bidNm", "ornt", "orntCode", "busiDivs", "cntrctMth",
     ]
     result_columns = ["noticeKey", "bidResult", "bidMth"]
@@ -433,6 +435,38 @@ def split_unconfirmed(notices, all_notices):
     return out
 
 
+def add_sibling_result(notices, all_notices):
+    """'동일사업 다른 공고 결과' 공고에 같은 사업의 최종 결과를 붙인다. 화면 표시용이며 결과상태·집계는 바꾸지 않는다.
+
+    같은 사업키에서 입찰결과가 직접 있는 다른 공고 중 개찰시각이 가장 늦은 공고(사업의 최종 결과)를 쓴다.
+    같은 사업 공고는 기관·사업구분·계약방법·공고명이 모두 같아 위험도 조건도 같다.
+    """
+    out = notices.copy()
+    out[["형제결과", "형제출처", "형제이력"]] = pd.NA
+    targets = out.loc[out["결과상태"].eq("동일사업_다른공고결과"), ["noticeKey", "businessKey"]]
+    if targets.empty:
+        return out
+    pool = all_notices.loc[all_notices["결과상태"].isin(["낙찰", "유찰", "순위확정", "판단보류"])
+                           & all_notices["businessKey"].isin(targets["businessKey"]),
+                           ["noticeKey", "businessKey", "결과상태", "pblancNo", "pblancOdr", "pblancSe", "opengDt"]].copy()
+    pool["opening_at"] = parse_datetime(pool["opengDt"])
+    pool["차수"] = pd.to_numeric(pool["pblancOdr"], errors="coerce")
+    pool = pool.sort_values(["businessKey", "opening_at", "차수"], na_position="first")
+    by_business = {
+        key: (g.iloc[-1], " → ".join(g["결과상태"].astype(str)))
+        for key, g in pool.groupby("businessKey", sort=False)
+    }
+    for idx, key in targets["businessKey"].items():
+        if key not in by_business:
+            continue
+        last, history = by_business[key]
+        odr = f" {int(last['차수'])}차" if pd.notna(last["차수"]) else ""
+        out.at[idx, "형제결과"] = last["결과상태"]
+        out.at[idx, "형제출처"] = f"{last['pblancNo']}{odr} {last['pblancSe']}".strip()
+        out.at[idx, "형제이력"] = history
+    return out
+
+
 def rank_notices(notices, amount_reference):
     """2025년 공고 전체를 위험도 순으로 줄 세워 10등급을 매긴다 (KPI 2와 같은 방식).
 
@@ -497,17 +531,30 @@ def notice_table(notices):
         "사업구분": view["busiDivs"],
         "계약방법": view["cntrctMth"],
         "금액 구간": view["사업규모구간"],
-        "실제 결과": view["결과상태"].map(lambda s: RESULT_SHORT.get(s, s)),
+        "실제 결과": [result_text(s, sib) for s, sib in zip(view["결과상태"], view["형제결과"])],
     })
 
 
+def result_text(status, sibling=None):
+    """표의 실제 결과 글자. 같은 사업 결과가 있으면 '다른 공고 결과(유찰)'처럼 괄호로 붙인다."""
+    short = RESULT_SHORT.get(status, status)
+    if status == "동일사업_다른공고결과" and pd.notna(sibling):
+        return f"{short}({sibling})"
+    return short
+
+
 def style_results(table):
-    """실제 결과 열 글자색: 유찰 빨강, 낙찰·순위확정 초록, 나머지(결과 없음 계열) 회색."""
+    """실제 결과 열 글자색: 유찰 빨강, 낙찰·순위확정 파랑, 나머지(결과 없음 계열) 회색.
+    '다른 공고 결과(유찰)'처럼 괄호가 있으면 괄호 안 같은 사업 결과의 색을 따른다."""
     colors = {RESULT_SHORT.get(k, k): v for k, v in RESULT_COLORS.items()}
+
+    def color_of(text):
+        inner = text[text.find("(") + 1:-1] if text.endswith(")") and "(" in text else text
+        return colors.get(inner, colors.get(text, "#7F8C8D"))
+
     styler = table.style
     apply_cells = getattr(styler, "map", None) or styler.applymap  # pandas 2.0은 applymap만 있음
-    return apply_cells(lambda v: f"color: {colors.get(v, '#7F8C8D')}; font-weight: 600",
-                       subset=["실제 결과"])
+    return apply_cells(lambda v: f"color: {color_of(str(v))}; font-weight: 600", subset=["실제 결과"])
 
 
 def choices(frame, key):
@@ -516,7 +563,7 @@ def choices(frame, key):
 
 def render():
     st.title("공고별 유찰 위험도 및 유사사례")
-    st.caption("2025년 공고의 금액 5분위 4변수 위험도(금액 미확인 시 3변수 대체)를 2021~2024년 과거 사례와 비교합니다.")
+    st.caption("2025년 공고의 4변수 위험도를 2021~2024년 과거 사례와 비교합니다")
     try:
         data = load_prepared()
         train = data.loc[data["연도"].between(TRAIN_START, TRAIN_END) & data["평가가능"]].copy()
@@ -530,7 +577,7 @@ def render():
             data["연도"].between(TRAIN_START, TRAIN_END) & data["평가가능"]
         ].copy()
         amount_reference = build_reference(train, AMOUNT_STEPS)
-        notice_2025 = split_unconfirmed(candidates(data, TARGET_YEAR), data)
+        notice_2025 = add_sibling_result(split_unconfirmed(candidates(data, TARGET_YEAR), data), data)
         # 등급은 결과·등급 필터를 걸기 전 2025년 공고 전체 기준으로 매긴다
         ranked_2025 = rank_notices(notice_2025, amount_reference)
         notice_2025 = notice_2025.merge(ranked_2025[["noticeKey", "위험도", "위험등급"]],
@@ -542,7 +589,7 @@ def render():
 
     # 사전 검토 화면이므로 2025년 실제 결과는 기본 숨김. 켜면 결과 필터·결과 열·사후 유찰률을 함께 보여 준다
     show_actual = st.toggle("2025년 실제 결과 보기 (사후 확인용)", value=False, key="risk_show_actual",
-                            help="사전 검토 화면이므로 기본은 숨김입니다. 검증할 때만 켜세요.")
+                            help="사전 검토 화면이므로 기본은 숨김입니다. 검증할 때만 켜세요")
 
     tab_notice, tab_manual = st.tabs(["2025년 공고 선택", "직접 입력"])
     with tab_notice:
@@ -573,24 +620,56 @@ def render():
                 if not show_actual:
                     summary_tbl = summary_tbl.drop(columns="실제 유찰률(사후)")
                 st.dataframe(summary_tbl, hide_index=True, use_container_width=True)
-                st.caption("등급은 2025년 공고 전체를 위험도 순으로 같은 건수씩 나눈 순위입니다."
-                           + (" 실제 유찰률은 결과확정 공고(낙찰·유찰·순위확정)만으로 계산한 사후 결과입니다."
+                st.caption("등급은 2025년 공고 전체를 위험도 순으로 같은 건수씩 나눈 순위입니다"
+                           + (". 실제 유찰률은 결과확정 공고(낙찰·유찰·순위확정)만으로 계산한 사후 결과입니다"
                               if show_actual else ""))
         if notice_2025.empty:
-            st.warning("조건에 맞는 2025년 공고가 없습니다.")
+            st.warning("조건에 맞는 2025년 공고가 없습니다")
         else:
             notice_2025 = notice_2025.copy()
+            # 선택 상자 표시: 부대(발주기관)명을 앞에 두어 이름 일부만 쳐도 자동완성으로 걸러지게 한다
             notice_2025["검색표시"] = (
-                notice_2025["위험등급"].astype("Int64").astype("string") + "등급 | " +
-                notice_2025["공고일"].dt.strftime("%Y-%m-%d").fillna("") + " | " +
-                notice_2025["pblancNo"].astype("string").fillna("") + " | " +
-                notice_2025["bidNm"].astype("string").fillna("") + " | " +
-                notice_2025["ornt"].astype("string").fillna("")
+                notice_2025["ornt"].astype("string").fillna("") + " · " +
+                notice_2025["bidNm"].astype("string").fillna("") + " (" +
+                # 같은 공고번호의 정정·재공고와 구별되도록 차수·공고구분까지 표시
+                notice_2025["pblancNo"].astype("string").fillna("") + "-" +
+                notice_2025["pblancOdr"].astype("string").fillna("") + "차 " +
+                notice_2025["pblancSe"].astype("string").fillna("") + " · " +
+                notice_2025["공고일"].dt.strftime("%Y-%m-%d").fillna("") + " · " +
+                notice_2025["위험등급"].astype("Int64").astype("string") + "등급)"
             )
-            search = st.text_input("공고명·공고번호·기관명 검색", key="risk_notice_search")
+
+            # 1) 공고 선택: 글자를 입력하면 목록이 바로 걸러진다 (등급·실제 결과 필터만 반영)
+            by_risk = notice_2025.sort_values("위험도", ascending=False)  # 표와 같은 위험도 높은 순
+            label_map = dict(zip(by_risk["noticeKey"].astype(str), by_risk["검색표시"].astype(str)))
+            with st.form("risk_notice_form"):
+                key = st.selectbox("공고 선택", options=list(label_map), index=None,
+                                   format_func=lambda x: label_map.get(x, x),
+                                   placeholder="부대명·공고명·공고번호 일부를 입력하면 자동완성됩니다")
+                submit = st.form_submit_button("선택 공고 분석", type="primary")
+            if submit:
+                if not key:
+                    st.warning("공고를 선택해 주세요")
+                else:
+                    selected = notice_2025.loc[notice_2025["noticeKey"].astype(str).eq(key)].iloc[0]
+                    st.session_state["risk_input"] = {
+                        "mode": "공고 선택", "noticeKey": key, "기관그룹": str(selected["기관그룹"]),
+                        "busiDivs": str(selected["busiDivs"]), "cntrctMth": str(selected["cntrctMth"]),
+                        "공고명": str(selected["bidNm"]), "발주기관": str(selected["ornt"]),
+                        "실제결과": str(selected["결과상태"]),
+                        "형제결과": selected["형제결과"], "형제출처": selected["형제출처"],
+                        "형제이력": selected["형제이력"],
+                        "사업규모금액": selected["사업규모금액"],
+                        "사업규모구간": selected["사업규모구간"],
+                        "금액출처": selected["금액출처"],
+                        "입찰방법출처": selected["입찰방법출처"],
+                    }
+
+            # 2) 공고 목록 표: 아래 검색어는 표만 거른다 (공고 선택에는 영향 없음)
+            search = st.text_input("목록에서 찾기 (공고명·공고번호·기관명)", key="risk_notice_search")
             matched = notice_2025.loc[notice_2025["검색표시"].str.contains(search, regex=False, case=False, na=False)]
             if matched.empty:
-                st.info("검색 결과가 없습니다.")
+                st.info("검색 결과가 없습니다")
             else:
                 st.caption(f"조건에 맞는 2025년 공고 {len(matched):,}건 (위험도 높은 순)")
                 table = notice_table(matched)
@@ -599,42 +678,25 @@ def render():
                 else:
                     st.dataframe(table.drop(columns="실제 결과"), hide_index=True, use_container_width=True,
                                  height=280)
-                label_map = dict(zip(matched["noticeKey"].astype(str), matched["검색표시"].astype(str)))
-                with st.form("risk_notice_form"):
-                    key = st.selectbox("공고 선택", options=[""] + list(label_map),
-                                       format_func=lambda x: label_map.get(x, "공고를 선택하세요"))
-                    submit = st.form_submit_button("선택 공고 분석", type="primary")
-                if submit:
-                    if not key:
-                        st.warning("공고를 선택해 주세요.")
-                    else:
-                        selected = matched.loc[matched["noticeKey"].astype(str).eq(key)].iloc[0]
-                        st.session_state["risk_input"] = {
-                            "mode": "공고 선택", "noticeKey": key, "기관그룹": str(selected["기관그룹"]),
-                            "busiDivs": str(selected["busiDivs"]), "cntrctMth": str(selected["cntrctMth"]),
-                            "공고명": str(selected["bidNm"]), "발주기관": str(selected["ornt"]),
-                            "실제결과": str(selected["결과상태"]),
-                            "사업규모금액": selected["사업규모금액"],
-                            "사업규모구간": selected["사업규모구간"],
-                            "금액출처": selected["금액출처"],
-                            "입찰방법출처": selected["입찰방법출처"],
-                        }
     with tab_manual:
-        st.caption("공고번호 없이도 조건과 사업금액을 입력해 4변수 위험도를 조회할 수 있습니다.")
+        st.caption("공고번호 없이도 조건과 사업금액을 입력해 4변수 위험도를 조회할 수 있습니다")
         with st.form("risk_manual_form"):
             c1, c2 = st.columns(2)
             with c1:
-                org = st.selectbox("기관그룹", [""] + [v for v in choices(train, "기관그룹") if v != "미분류"])
-                business = st.selectbox("사업구분", [""] + choices(train, "busiDivs"))
+                # 위험도는 특정 조합의 과거 유찰률이라 '전체' 선택지는 두지 않고, 빈 줄 대신 안내 문구를 보인다
+                org = st.selectbox("기관그룹", [v for v in choices(train, "기관그룹") if v != "미분류"],
+                                   index=None, placeholder="기관그룹을 선택하세요")
+                business = st.selectbox("사업구분", choices(train, "busiDivs"),
+                                        index=None, placeholder="사업구분을 선택하세요")
             with c2:
                 methods = [m for m in choices(train, "cntrctMth") if "수의" not in m]
-                method = st.selectbox("계약방법", [""] + methods)
+                method = st.selectbox("계약방법", methods, index=None, placeholder="계약방법을 선택하세요")
             manual_amount = st.number_input("사업금액 (원) — 4변수 위험도용", min_value=0, value=0, step=1_000_000,
-                                            help="0원은 금액 미입력을 뜻하며, 이 경우 3변수 위험도로 대체합니다.")
+                                            help="0원은 금액 미입력을 뜻하며, 이 경우 3변수 위험도로 대체합니다")
             submit_manual = st.form_submit_button("입력 조건 분석", type="primary")
         if submit_manual:
             if not all((org, business, method)):
-                st.warning("세 조건을 모두 선택해 주세요.")
+                st.warning("세 조건을 모두 선택해 주세요")
             else:
                 st.session_state["risk_input"] = {"mode": "직접 입력", "noticeKey": None,
                     "기관그룹": org, "busiDivs": business, "cntrctMth": method,
@@ -646,10 +708,10 @@ def render():
     if inp is not None:
         inp["사업규모구간"] = amount_bin(inp.get("사업규모금액"), boundaries)
     if not inp:
-        st.info("상단의 두 탭 중 하나에서 분석 대상을 지정해 주세요.")
+        st.info("상단의 두 탭 중 하나에서 분석 대상을 지정해 주세요")
         return
     if inp.get("noticeKey") and inp["noticeKey"] not in set(notice_all["noticeKey"].astype(str)):
-        st.warning("이전에 선택한 공고가 현재 목록에 없습니다. 다시 선택해 주세요.")
+        st.warning("이전에 선택한 공고가 현재 목록에 없습니다. 다시 선택해 주세요")
         return
 
     with st.container(border=True):
@@ -678,18 +740,30 @@ def render():
         return
 
     grade, top_share = grade_of(risk, ranked_2025, inp.get("noticeKey"))
-    # 큰 지표는 사전 예측 정보만. 실제 결과는 스위치를 켰을 때 아래에 작게 사후 확인으로 표시
-    a, g, b = st.columns(3)
+    # 사전 예측 지표 3개. 실제 결과 스위치를 켜면 네 번째 칸에 사후 결과를 같은 크기로 표시
+    show_result = show_actual and inp.get("noticeKey")
+    a, g, b, *rest = st.columns(4 if show_result else 3)
     a.metric("과거 유사조건 유찰률 (4변수 우선)", f'{risk["위험도"] * 100:.2f}%')
     g.metric("위험 등급", f"{grade}등급 / 10" + (" · 고위험" if grade >= 9 else ""),
              delta=f"2025년 공고 중 상위 {np.ceil(top_share * 100):.0f}%", delta_color="off",
              help=f"2025년 공고 {len(ranked_2025):,}건을 위험도 순으로 10등급으로 나눈 순위 (1 = 가장 낮음). "
-                  "9·10등급이 상위 20% 고위험군이며, 실제 결과는 순위에 사용하지 않는다.")
+                  "9·10등급이 상위 20% 고위험군이며, 실제 결과는 순위에 사용하지 않는다")
     b.metric("근거 공고 수", f'{risk["근거공고수"]:,}건')
-    if show_actual and inp.get("noticeKey"):
+    if show_result:
         actual = inp.get("실제결과")
-        st.caption(f"사후 확인 · 2025년 실제 결과: **{RESULT_LABELS.get(actual, actual)}** — "
-                   f"{RESULT_HELP.get(actual, '')}")
+        # 값은 칸에서 잘리지 않게 짧은 이름에 결과 색을 입히고, 정식 이름과 뜻은 물음표 툴팁으로
+        sibling = inp.get("형제결과")
+        help_text = f"**{RESULT_LABELS.get(actual, actual)}**  \n{RESULT_HELP.get(actual, '')}"
+        if actual == "동일사업_다른공고결과" and pd.notna(sibling):
+            # 같은 사업의 최종 결과를 크게 보이되, 이 공고의 결과가 아니라는 출처를 바로 아래에 적는다
+            color = RESULT_METRIC_COLORS.get(sibling, "gray")
+            rest[0].metric("2025년 실제 결과 (사후 확인)", f":{color}[{sibling}]",
+                           help=help_text + f"  \n같은 사업 결과 순서: {inp.get('형제이력')}")
+            rest[0].caption(f"이 공고는 결과 없음 · 같은 사업 {inp.get('형제출처')} 결과")
+        else:
+            color = RESULT_METRIC_COLORS.get(actual, "gray")
+            rest[0].metric("2025년 실제 결과 (사후 확인)", f":{color}[{RESULT_SHORT.get(actual, actual)}]",
+                           help=help_text)
 
     with st.container(border=True):
         st.subheader("위험도 산정 근거")
@@ -698,9 +772,9 @@ def render():
         st.write(f'**산식:** {risk["근거유찰건수"]:,} ÷ {risk["근거공고수"]:,} × 100 = {risk["위험도"]*100:.2f}%')
         if risk["적용단계"] > 1:
             st.info(
-                "금액 미확인 또는 4변수 표본 부족으로 3변수 이하 단계가 적용됐습니다."
+                "금액 미확인 또는 4변수 표본 부족으로 3변수 이하 단계가 적용됐습니다"
             )
-        st.caption("과거 동일 조건의 관측 유찰률이며, 해당 공고의 확정적인 유찰 확률은 아닙니다.")
+        st.caption("과거 동일 조건의 관측 유찰률이며, 해당 공고의 확정적인 유찰 확률은 아닙니다")
 
     with st.expander("4·3·2·1변수 위험도 비교", expanded=False):
         comparison = compare_risk_by_level(inp, amount_reference)
@@ -709,32 +783,32 @@ def render():
         if chart is not None:
             st.plotly_chart(chart, use_container_width=True)
         else:
-            st.info("비교할 수 있는 과거 조합이 없습니다.")
+            st.info("비교할 수 있는 과거 조합이 없습니다")
 
         unavailable = comparison.loc[comparison["유찰률"].isna(), "모델"].tolist()
         if unavailable:
             st.caption(
                 " · ".join(unavailable)
-                + "는 입력 정보가 없거나 동일 조건의 과거 공고가 10건 미만이어서 표시하지 않았습니다."
+                + "는 입력 정보가 없거나 동일 조건의 과거 공고가 10건 미만이어서 표시하지 않았습니다"
             )
 
         st.caption(
             "막대는 각 변수 조합의 관측 유찰률을 독립적으로 비교한 값입니다. "
             "가장 높은 막대가 최종 선택 모델이라는 의미는 아닙니다. "
-            "대표 위험도는 위의 4→3→2→1변수 단계적 대체 규칙을 따릅니다."
+            "대표 위험도는 위의 4→3→2→1변수 단계적 대체 규칙을 따릅니다"
         )
 
         boundaries_text = " / ".join(f"{value:,.0f}" for value in boundaries)
         st.caption(
             f"5분위 경계(2021~2024년 학습): {boundaries_text}원. "
-            "2025년 결과는 학습·금액 구간 산출에 사용하지 않습니다."
+            "2025년 결과는 학습·금액 구간 산출에 사용하지 않습니다"
         )
         if inp.get("입찰방법출처") == "입찰결과_사후복원":
-            st.warning("이 공고의 입찰방법은 사후 입찰결과에서 복원된 값입니다.")
+            st.warning("이 공고의 입찰방법은 사후 입찰결과에서 복원된 값입니다")
 
     with st.container(border=True):
         st.subheader("과거 유사공고")
-        st.caption(f'적용 조건과 일치하는 2021~2024년 결과확정 경쟁성 공고 {len(history):,}건 중 최근 100건을 표시합니다.')
+        st.caption(f'적용 조건과 일치하는 2021~2024년 결과확정 경쟁성 공고 {len(history):,}건 중 최근 100건을 표시합니다')
         columns = ["공고일", "pblancNo", "bidNm", "ornt", "기관그룹", "busiDivs", "cntrctMth", "결과상태", "noticeKey"]
         view = history.sort_values(["공고일", "noticeKey"], ascending=[False, True]).head(100)[columns].copy()
         view["공고일"] = view["공고일"].dt.strftime("%Y-%m-%d")
@@ -745,4 +819,4 @@ def render():
         download_cols["공고일"] = download_cols["공고일"].dt.strftime("%Y-%m-%d")
         st.download_button("전체 유사공고 CSV", download_cols.to_csv(index=False).encode("utf-8-sig"),
                            file_name="historical_comparable_notices.csv", mime="text/csv")
-    st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다.")
+    st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다")

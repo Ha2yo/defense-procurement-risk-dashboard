@@ -14,6 +14,8 @@ prepare_bid_result = importlib.import_module(
     "scripts.analysis.05_rebid_followup_analysis"
 ).prepare
 
+PRIVATE_KEYWORD = "수의"  # 계약방법에 이 글자가 있으면 수의계약 (화면 2·3과 같은 기준)
+
 
 # ============================================================
 # 1. 공통 분석 데이터
@@ -48,6 +50,8 @@ def prepare_overview_data():
     data["기관그룹"] = data["기관그룹"].fillna("미분류")
     data["계약방법"] = data["cntrctMth"].astype("string").str.strip().replace("", pd.NA).fillna("미분류")
     data["사업유형"] = data["busiDivs"].astype("string").str.strip().replace("", pd.NA).fillna("미분류")
+    # 팀 기준(분석계획표 공통 기준): 수의계약은 경쟁입찰과 발생 구조가 달라 모든 분석에서 제외
+    data["is_private"] = data["cntrctMth"].astype("string").str.contains(PRIVATE_KEYWORD, na=False, regex=False)
 
     # 결과확정은 3종만, 취소공고는 집계에서 제외
     data["confirmed"] = data["result_status"].isin(["유찰", "낙찰", "순위확정"])
@@ -84,7 +88,6 @@ def group_summary(df, column):
 # ============================================================
 def render():
     st.title("전체 유찰 현황")
-    st.caption("2021~2025년 · 공고(noticeKey) 단위 · 유찰 규모와 우선 분석 대상")
     ui.source_note()
 
     try:
@@ -97,19 +100,29 @@ def render():
         st.subheader("조회 조건")
         c1, c2 = st.columns(2)
         with c1:
-            years = st.multiselect("공고 연도", [2021, 2022, 2023, 2024, 2025], default=[2021, 2022, 2023, 2024, 2025])
+            # 연도 버튼을 눌러 켜고 끔. 연속되지 않은 연도 조합도 고를 수 있고 순서가 항상 고정된다
+            years = st.pills("공고 연도", [2021, 2022, 2023, 2024, 2025], selection_mode="multi",
+                             default=[2021, 2022, 2023, 2024, 2025], key="overview_years")
             org = st.selectbox("기관그룹", ["전체"] + sorted(full["기관그룹"].dropna().unique().tolist()))
         with c2:
             business = st.selectbox("사업유형", ["전체"] + sorted(full["사업유형"].dropna().unique().tolist()))
-            method = st.selectbox("계약방법", ["전체"] + sorted(full["계약방법"].dropna().unique().tolist()))
+            methods = full.loc[~full["is_private"], "계약방법"].dropna().unique().tolist()
+            method = st.selectbox("계약방법", ["전체"] + sorted(methods))
+
+    if not years:
+        st.warning("공고 연도를 하나 이상 선택해 주세요")
+        st.stop()
 
     data = apply_filters(full, years, org, business, method)
+    private_excluded = int(data["is_private"].sum())
+    data = data.loc[~data["is_private"]]
     confirmed = data.loc[data["confirmed"]]
     failed_count = int(confirmed["failed"].sum())
 
     # --------------------------------------------------------
     # 01. 전체 유찰 규모
     # --------------------------------------------------------
+    st.markdown("<div style='height: 32px'></div>", unsafe_allow_html=True)
     st.subheader("01. 전체 유찰 규모")
     st.caption("국방 조달에서 유찰이 얼마나 발생하고 있는가?")
     c1, c2, c3, c4 = st.columns(4)
@@ -117,29 +130,34 @@ def render():
     c2.metric("결과확정 공고 수", f"{len(confirmed):,}건")
     c3.metric("유찰 공고 수", f"{failed_count:,}건")
     c4.metric("유찰률", metric_rate(failed_count, len(confirmed)))
-    st.caption("유찰률의 분모는 결과확정 공고(유찰·낙찰·순위확정)이며, 미확인·취소·판단보류는 포함하지 않습니다.")
+    st.caption("유찰률의 분모는 결과확정 경쟁성 공고(유찰·낙찰·순위확정)이며, 미확인·취소·판단보류는 포함하지 않습니다  \n"
+               f"수의계약 {private_excluded:,}건은 경쟁입찰과 발생 구조가 달라 모든 지표에서 제외")
 
     # --------------------------------------------------------
     # 02. 유찰 집중 영역
     # --------------------------------------------------------
+    st.markdown("<div style='height: 21px'></div>", unsafe_allow_html=True)
     st.subheader("02. 유찰 집중 영역 — 우선 분석 대상")
-    st.caption("유찰 건수와 유찰률을 함께 비교해 먼저 검토할 영역을 탐색합니다.")
-    order = st.radio("정렬 기준", ["유찰 건수 많은 순", "유찰률 높은 순"], horizontal=True)
+    st.caption("유찰 건수와 유찰률을 함께 비교해 먼저 검토할 영역을 탐색합니다")
+    order = st.radio("정렬 기준", ["유찰 건수", "유찰률"], horizontal=True)
     tabs = st.tabs(["기관그룹", "계약방법", "사업유형"])
     
     for tab, col in zip(tabs, ["기관그룹", "계약방법", "사업유형"]):
         with tab:
             summary = group_summary(data, col)
             if summary.empty:
-                st.info("결과확정 공고가 없습니다.")
+                st.info("결과확정 공고가 없습니다")
                 continue
-            sort_col = "유찰 공고 수" if order == "유찰 건수 많은 순" else "유찰률(%)"
+            sort_col = "유찰 공고 수" if order == "유찰 건수" else "유찰률(%)"
             
             summary = summary.sort_values([sort_col, "결과확정 공고 수"], ascending=False)
             unit = "건" if sort_col == "유찰 공고 수" else "%"
-            fig = px.bar(summary, x=sort_col, y=col, orientation="h", color_discrete_sequence=[ui.COLOR_BAR],
+            fig = px.bar(summary, x=sort_col, y=col, orientation="h",
                          custom_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"])
+            # 화면 3과 같이 1위 막대만 진한 색으로 강조
+            is_top = summary[sort_col].eq(summary[sort_col].max())
             fig.update_traces(
+                marker_color=[ui.COLOR_HIGHLIGHT if t else ui.COLOR_BASE for t in is_top],
                 texttemplate="%{x:,.0f}건" if unit == "건" else "%{x:.2f}%", textposition="outside",
                 hovertemplate="%{y}<br>유찰 %{customdata[0]:,}건 / 결과확정 %{customdata[1]:,}건"
                               "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>",
@@ -159,7 +177,7 @@ def render():
             st.info(
                 f"{col}별 유찰 건수가 가장 많은 그룹은 '{count_leader[col]}'입니다. "
                 f"유찰 {leader_failed:,}건으로 선택한 범위의 전체 유찰 "
-                f"{total_failed:,}건 중 {share:.1f}%를 차지합니다."
+                f"{total_failed:,}건 중 {share:.1f}%를 차지합니다"
             )
             
             st.dataframe(summary, hide_index=True, use_container_width=True,
