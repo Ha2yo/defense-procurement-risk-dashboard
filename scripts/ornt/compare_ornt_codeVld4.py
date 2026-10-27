@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # scripts/ornt
 ROOT = os.path.join(BASE_DIR, "..", "..")                # 프로젝트 루트
 
 # ▼ 품목명세서 파일 경로 (파일 이름이 다르면 여기만 고치기)
-ITEM_FILE = os.path.join(ROOT, "data", "raw", "bid_item_20210101_20251231.csv")
+ITEM_FILE = os.path.join(ROOT, "data", "clean", "bid_item_clean_20210101_20251231.csv")
 ORNT_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "orntCode_unique.csv")
 OUT_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "orntCode_codeVld4_all.csv")
 RESULT_FILE = os.path.join(ROOT, "data", "analysis", "ornt_code", "bid_orntCode_20210101_20251231.csv")
@@ -121,7 +121,7 @@ result = result.sort_values(["최다비율", "품목수"], ascending=[True, Fals
 result.to_csv(OUT_FILE, index=False, encoding="utf-8-sig")
 
 result2 = result[["ornt", "orntCode", "기관그룹"]]
-result2.rename(columns={'기관그룹':'codeVld4'}, inplace=True)
+result2.rename(columns={'기관그룹':'orntGroup'}, inplace=True)
 result2.to_csv(RESULT_FILE, index=False, encoding="utf-8-sig")
   
 # 4) 요약 출력
