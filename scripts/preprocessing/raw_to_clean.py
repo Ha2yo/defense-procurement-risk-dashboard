@@ -311,14 +311,6 @@ NOTICE_KEY_COLUMNS = [
     "pblancOdr",
 ]
 
-CONTRACT_LINK_KEY_COLUMNS = [
-    "dcsNo",
-    "ornt",
-    "cntrctMth",
-    "bidMth",
-]
-
-
 # ------------------------------------------------------------
 # 조달계획: 원본 + businessKey
 # ------------------------------------------------------------
@@ -346,7 +338,7 @@ notice = make_key(
 
 
 # ------------------------------------------------------------
-# 입찰결과: 원본 + businessKey + noticeKey + contractLinkKey
+# 입찰결과: 원본 + businessKey + noticeKey
 # ------------------------------------------------------------
 result = make_key(
     result,
@@ -360,22 +352,10 @@ result = make_key(
     "noticeKey",
 )
 
-result = make_key(
-    result,
-    CONTRACT_LINK_KEY_COLUMNS,
-    "contractLinkKey",
-)
-
-
 # ------------------------------------------------------------
-# 계약정보: 원본 + contractLinkKey
+# 계약정보(선택): 연결키 없이 원본 컬럼만 정제·저장
 # ------------------------------------------------------------
-if contract is not None:
-    contract = make_key(
-        contract,
-        CONTRACT_LINK_KEY_COLUMNS,
-        "contractLinkKey",
-    )
+# 계약연결키 생성은 현 프로젝트 범위에서 제외한다.
 
 
 # ------------------------------------------------------------
@@ -458,7 +438,7 @@ validate_columns(
 validate_columns(
     result,
     RESULT_ORIGINAL_COLUMNS,
-    ["businessKey", "noticeKey", "contractLinkKey"],
+    ["businessKey", "noticeKey"],
     "입찰결과",
 )
 
@@ -466,7 +446,7 @@ if contract is not None:
     validate_columns(
         contract,
         CONTRACT_ORIGINAL_COLUMNS,
-        ["contractLinkKey"],
+        [],
         "계약정보",
     )
 
@@ -509,10 +489,6 @@ print_key_summary(notice, "noticeKey", "입찰공고")
 
 print_key_summary(result, "businessKey", "입찰결과")
 print_key_summary(result, "noticeKey", "입찰결과")
-print_key_summary(result, "contractLinkKey", "입찰결과")
-
-if contract is not None:
-    print_key_summary(contract, "contractLinkKey", "계약정보")
 
 if item is not None:
     print_key_summary(item, "businessKey", "품목명세서")
