@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from scripts.dashboard.components import source_note
+from scripts.dashboard import components as ui
 from scripts.dashboard.data_loader import load_notice, load_result
 
 # 파일명이 숫자로 시작해 일반 import 문을 쓸 수 없으므로 importlib로 불러온다
@@ -85,7 +85,7 @@ def group_summary(df, column):
 def render():
     st.title("전체 유찰 현황")
     st.caption("2021~2025년 · 공고(noticeKey) 단위 · 유찰 규모와 우선 분석 대상")
-    source_note()
+    ui.source_note()
 
     try:
         full = prepare_overview_data()
@@ -136,15 +136,20 @@ def render():
             sort_col = "유찰 공고 수" if order == "유찰 건수 많은 순" else "유찰률(%)"
             
             summary = summary.sort_values([sort_col, "결과확정 공고 수"], ascending=False)
-            fig = px.bar(summary, x=col, y=sort_col, hover_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"], color_discrete_sequence=["#4C78A8"])
             unit = "건" if sort_col == "유찰 공고 수" else "%"
-            
-            fig.update_layout(
-                title=f"{col}별 {sort_col.replace('(%)', '')} (단위: {unit})",
-                xaxis_title=None,
-                yaxis_title=None,
+            fig = px.bar(summary, x=sort_col, y=col, orientation="h", color_discrete_sequence=[ui.COLOR_BAR],
+                         custom_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"])
+            fig.update_traces(
+                texttemplate="%{x:,.0f}건" if unit == "건" else "%{x:.2f}%", textposition="outside",
+                hovertemplate="%{y}<br>유찰 %{customdata[0]:,}건 / 결과확정 %{customdata[1]:,}건"
+                              "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>",
             )
-            
+            # 가로 막대는 아래에서 위로 그려지므로 정렬 순서를 뒤집어 첫 항목이 맨 위에 오게 한다
+            fig.update_yaxes(title=None, categoryorder="array", categoryarray=list(summary[col])[::-1])
+            fig.update_xaxes(title=None, range=[0, summary[sort_col].max() * 1.15])
+            fig = ui.style_figure(fig, ui.hbar_height(len(summary)) + 30)
+            fig.update_layout(title=f"{col}별 {sort_col.replace('(%)', '')} (단위: {unit})",
+                              margin=dict(t=55))  # 차트 제목 자리
             st.plotly_chart(fig, use_container_width=True)
             count_leader = summary.sort_values("유찰 공고 수", ascending=False).iloc[0]
             total_failed = int(confirmed["failed"].sum())

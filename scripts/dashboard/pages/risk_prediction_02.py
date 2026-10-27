@@ -3,11 +3,12 @@
 공고 단위·공고일 기준 2021~2024년 결과확정 경쟁성 공고만 근거로 사용.
 2025년 결과는 산정에 사용하지 않고 선택 공고의 사후 결과 표시용으로만 사용.
 """
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
+from scripts.dashboard import components as ui
 from scripts.dashboard.data_loader import (
     load_notice,
     load_result,
@@ -354,24 +355,19 @@ def risk_comparison_chart(comparison):
     chart_data["강조"] = np.where(chart_data["유찰률"].eq(highest), "최고", "일반")
     chart_data["라벨"] = chart_data["유찰률"].map(lambda value: f"{value:.2f}%")
 
-    bars = alt.Chart(chart_data).mark_bar(size=54, cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
-        x=alt.X("모델:N", sort=["4변수", "3변수", "2변수", "1변수"], title=None),
-        y=alt.Y("유찰률:Q", title="과거 유찰률 (%)", scale=alt.Scale(zero=True)),
-        color=alt.Color(
-            "강조:N",
-            scale=alt.Scale(domain=["일반", "최고"], range=["#B7C6D9", "#5F90C8"]),
-            legend=None,
-        ),
-        tooltip=[
-            alt.Tooltip("모델:N", title="모델"),
-            alt.Tooltip("유찰률:Q", title="유찰률 (%)", format=".2f"),
-            alt.Tooltip("근거공고수:Q", title="근거 공고 수", format=","),
-        ],
+    order = ["4변수", "3변수", "2변수", "1변수"]
+    fig = px.bar(
+        chart_data, x="유찰률", y="모델", orientation="h", color="강조", text="라벨",
+        color_discrete_map={"일반": ui.COLOR_BASE, "최고": ui.COLOR_HIGHLIGHT},
+        custom_data=["근거공고수"],
     )
-    labels = bars.mark_text(dy=-9, color="#253247", fontSize=13).encode(
-        text=alt.Text("라벨:N"),
-    )
-    return (bars + labels).properties(height=245)
+    fig.update_traces(textposition="outside",
+                      hovertemplate="%{y}<br>과거 유찰률 %{x:.2f}%<br>근거 공고 수 %{customdata[0]:,}건"
+                                    "<extra></extra>")
+    # 가로 막대는 아래에서 위로 그려지므로 순서를 뒤집어 4변수가 맨 위에 오게 한다
+    fig.update_yaxes(title=None, categoryorder="array", categoryarray=order[::-1])
+    fig.update_xaxes(title="과거 유찰률(%)", range=[0, chart_data["유찰률"].max() + 5])
+    return ui.style_figure(fig, ui.hbar_height(len(chart_data)))
 
 
 def comparable_notices(train, condition, cols):
@@ -711,7 +707,7 @@ def render():
         chart = risk_comparison_chart(comparison)
 
         if chart is not None:
-            st.altair_chart(chart, use_container_width=True)
+            st.plotly_chart(chart, use_container_width=True)
         else:
             st.info("비교할 수 있는 과거 조합이 없습니다.")
 
