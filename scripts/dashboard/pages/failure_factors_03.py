@@ -1,11 +1,11 @@
 import math
 
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
-from scripts.dashboard.components import source_note
+from scripts.dashboard import components as ui
 from scripts.dashboard.data_loader import (
     load_item, load_notice, load_org_group, load_procure_plan, load_result,
 )
@@ -423,36 +423,26 @@ def rate_chart(summary, overall_rate):
     
     chart_df["label"] = [f"{r:.1f}%  (n={n:,})" for r, n in zip(chart_df["rate"], chart_df["n"])]
 
-    base = alt.Chart(chart_df).encode(
-        y=alt.Y("category:N", sort=list(chart_df["category"]), title=None, axis=alt.Axis(labelLimit=220)),
+    fig = px.bar(
+        chart_df, x="rate", y="category", orientation="h", color="강조", text="label",
+        color_discrete_map={"일반": ui.COLOR_BASE, "최고": ui.COLOR_HIGHLIGHT, "기타": ui.COLOR_MUTED},
+        custom_data=["n", "fails"],
     )
-    bars = base.mark_bar(cornerRadiusEnd=3).encode(
-        x=alt.X("rate:Q", title="유찰률(%)", scale=alt.Scale(domain=[0, chart_df["rate"].max() + 5])),
-        tooltip=[
-            alt.Tooltip("category:N", title="범주"),
-            alt.Tooltip("n:Q", title="공고 수", format=","),
-            alt.Tooltip("fails:Q", title="유찰 수", format=","),
-            alt.Tooltip("rate:Q", title="유찰률(%)", format=".2f"),
-        ],
-        color=alt.Color("강조:N",
-                        scale=alt.Scale(domain=["일반", "최고", "기타"], range=["#B7C6D9", "#2F5D8C", "#D3D3D3"]),
-                        legend=None),
+    fig.update_traces(
+        textposition="outside",
+        hovertemplate="%{y}<br>공고 수 %{customdata[0]:,}건 · 유찰 %{customdata[1]:,}건"
+                      "<br>유찰률 %{x:.2f}%<extra></extra>",
     )
-    label_enc = dict(x="rate:Q", text="label:N")
-    halo = base.mark_text(align="left", dx=4, fontSize=12,
-                          stroke="white", strokeWidth=4, strokeJoin="round").encode(**label_enc)
-    
-    labels = base.mark_text(align="left", dx=4, fontSize=12).encode(**label_enc)
-    
-    overall_df = pd.DataFrame({"x": [overall_rate], "text": [f"전체 {overall_rate:.2f}%"]})
-    overall = alt.Chart(pd.DataFrame({"x": [overall_rate]})).mark_rule(
-        color="#E45756", strokeDash=[4, 4], strokeWidth=2.5
-    ).encode(x="x:Q", tooltip=[alt.Tooltip("x:Q", title="전체 유찰률(%)", format=".2f")])
-    overall_label = alt.Chart(overall_df).mark_text(
-        color="#C0392B", fontWeight="bold", fontSize=12, baseline="bottom", dy=-4
-    ).encode(x="x:Q", y=alt.value(0), text="text:N")
-    
-    return (bars + overall + halo + labels + overall_label).properties(height=alt.Step(46))
+    # 가로 막대는 아래에서 위로 그려지므로 요약표 순서를 뒤집어 첫 범주가 맨 위에 오게 한다
+    fig.update_yaxes(title=None, categoryorder="array", categoryarray=list(chart_df["category"])[::-1])
+    fig.update_xaxes(title="유찰률(%)", range=[0, chart_df["rate"].max() + 5])
+    # 전체 유찰률 기준선: 막대 뒤(layer="below")에 그리고 값은 선 위쪽에 직접 표시
+    fig.add_vline(
+        x=overall_rate, line_dash="dash", line_color=ui.COLOR_REFERENCE, line_width=2.5, layer="below",
+        annotation_text=f"전체 {overall_rate:.2f}%", annotation_position="top",
+        annotation_font=dict(color=ui.COLOR_REFERENCE, size=12),
+    )
+    return ui.style_figure(fig, ui.hbar_height(len(chart_df)))
 
 
 def crosstab_view(summary):
@@ -507,7 +497,7 @@ def interpretation(factor, period, summary, stats, overall_rate):
 def render():
     st.title("유찰 요인 분석")
     st.caption("공고 조건에 따라 유찰률이 어떻게 달라지는지 탐색합니다. 통계적 연관성과 인과관계는 구분합니다.")
-    source_note()
+    ui.source_note()
 
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -581,7 +571,7 @@ def render():
     with st.container(border=True):
         st.subheader(f"{factor}별 유찰률")
         st.caption(md_safe(" · ".join([f"기간: {period}", "막대 = 범주별 유찰률, 빨간 점선 = 전체 유찰률", *notes[1:]])))
-        st.altair_chart(rate_chart(summary, overall_rate), use_container_width=True)
+        st.plotly_chart(rate_chart(summary, overall_rate), use_container_width=True)
         
         if factor == "계약·경쟁방식" and (summary["범주"] == ETC).any():
             st.caption(f"기타 = 공고 {MIN_CATEGORY_SIZE}건 미만 계약방식 묶음. "

@@ -1,10 +1,12 @@
 import os
 
-import altair as alt
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
+from scripts.dashboard import components as ui
 from scripts.dashboard.data_loader import DATA_DIR, TABLE_FILES, load_notice, load_result
 
 # ============================================================
@@ -336,42 +338,30 @@ def _nice_step(raw):
     return 10 * mag
 
 
-def _bar(data, cat, val, order=None, color="#4C78A8", colors=None):
-    """가로 막대 + 끝 숫자 라벨. 회색 배경 트랙 위에 둥근 막대를 그림.
+def _bar(data, cat, val, order=None, color=ui.COLOR_BAR, colors=None):
+    """가로 막대 + 끝 숫자 라벨. 회색 배경 트랙 위에 막대를 그림.
     colors={항목: 색}을 주면 항목별로 다른 색을 씀."""
     data = data.copy()
     data["라벨"] = [_count_label(n) for n in data[val]]
     max_v = float(data[val].max()) if len(data) else 0.0
     step = _nice_step(max(max_v, 1) * 1.3 / 4)
     domain_max = float(np.ceil(max(max_v, 1) * 1.3 / step) * step)  # 눈금이 딱 떨어지게
-    data["_track"] = domain_max
+    order = order or list(data.sort_values(val, ascending=False)[cat])
+    bar_colors = [colors.get(c, color) for c in data[cat]] if colors else color
 
-    y = alt.Y(f"{cat}:N", sort=order or alt.EncodingSortField(val, order="descending"), title=None,
-              axis=alt.Axis(labelFontSize=15, labelFontWeight=600, labelColor=INK, labelLimit=400,
-                            labelPadding=12, domain=False, ticks=False))
-    x_scale = alt.Scale(domain=[0, domain_max], nice=False)
-    tooltip = [alt.Tooltip(f"{cat}:N", title="구분"), alt.Tooltip(f"{val}:Q", title="건수", format=",")]
-
-    track = alt.Chart(data).mark_bar(color=TRACK, size=26, cornerRadius=6).encode(
-        x=alt.X("_track:Q", scale=x_scale, title=None,
-                axis=alt.Axis(format=",d", values=list(np.arange(0, domain_max + step / 2, step)),
-                              labelColor=MUTED, labelFontSize=12, grid=False,
-                              domain=False, ticks=False, labelPadding=6)),
-        y=y,
-    )
-    if colors:
-        bar_color = alt.Color(f"{cat}:N", legend=None,
-                              scale=alt.Scale(domain=list(colors), range=list(colors.values())))
-    else:
-        bar_color = alt.value(color)
-    bars = alt.Chart(data).mark_bar(size=26, cornerRadius=6).encode(
-        x=alt.X(f"{val}:Q", scale=x_scale), y=y, color=bar_color, tooltip=tooltip)
-    labels = alt.Chart(data).mark_text(align="left", dx=8, fontSize=15, fontWeight="bold",
-                                       color=INK).encode(
-        x=alt.X(f"{val}:Q", scale=x_scale), y=y, text="라벨:N")
-    return (alt.layer(track, bars, labels)
-            .properties(height=58 * max(len(data), 2))
-            .configure_view(strokeWidth=0))
+    fig = go.Figure()
+    fig.add_bar(y=data[cat], x=[domain_max] * len(data), orientation="h", width=0.6,
+                marker_color=TRACK, hoverinfo="skip")                                 # 배경 트랙
+    fig.add_bar(y=data[cat], x=data[val], orientation="h", width=0.6, marker_color=bar_colors,
+                text=data["라벨"], textposition="outside", textfont=dict(color=INK),
+                hovertemplate="%{y}: %{x:,}건<extra></extra>")
+    # 가로 막대는 아래에서 위로 그려지므로 순서를 뒤집어 첫 항목이 맨 위에 오게 한다
+    fig.update_yaxes(title=None, categoryorder="array", categoryarray=order[::-1],
+                     tickfont=dict(color=INK), ticks="", showline=False)
+    fig.update_xaxes(title=None, range=[0, domain_max], showgrid=False, zeroline=False,
+                     tickvals=list(np.arange(0, domain_max + step / 2, step)), tickformat=",d",
+                     tickfont=dict(color=MUTED, size=12))
+    return ui.style_figure(fig, ui.hbar_height(len(data)))
 
 
 def render():
@@ -441,7 +431,7 @@ def render():
                 .reindex(FOLLOWUP_STATUS_ORDER, fill_value=0)
                 .rename_axis("상태").reset_index(name="건수")
             )
-            st.altair_chart(
+            st.plotly_chart(
                 _bar(status_counts, "상태", "건수", FOLLOWUP_STATUS_ORDER, colors=STATUS_COLORS),
                 use_container_width=True,
             )
@@ -473,7 +463,7 @@ def render():
                 res = (rebids["next_result"].value_counts()
                        .reindex(NEXT_RESULT_ORDER, fill_value=0)
                        .rename_axis("결과").reset_index(name="건수"))
-                st.altair_chart(
+                st.plotly_chart(
                     _bar(res, "결과", "건수", NEXT_RESULT_ORDER, colors=NEXT_RESULT_COLORS),
                     use_container_width=True,
                 )
@@ -546,17 +536,18 @@ def render():
             max_day = int(d["delay_days"].max())
             limit = st.slider("표시 상한(일)", 10, max(max_day, 10), min(max_day, 100), step=5)
             shown = d[d["delay_days"] <= limit]
-            hist = alt.Chart(shown).mark_bar(color="#4C78A8").encode(
-                x=alt.X("delay_days:Q", bin=alt.Bin(step=5), title="추가 소요일(일)",
-                        axis=alt.Axis(format=",d")),
-                y=alt.Y("count()", title="건수", axis=alt.Axis(format=",d")),
-                tooltip=[alt.Tooltip("count()", title="건수")],
-            )
-            median_rule = alt.Chart(pd.DataFrame({"v": [st_["median"]]})).mark_rule(
-                color="#E45756", strokeDash=[4, 4]).encode(x="v:Q")
-            st.altair_chart((hist + median_rule).properties(height=320), use_container_width=True)
+            hist = px.histogram(shown, x="delay_days", color_discrete_sequence=[ui.COLOR_BAR])
+            hist.update_traces(xbins=dict(start=0, size=5),
+                               hovertemplate="%{x}일: %{y:,}건<extra></extra>")
+            hist.update_xaxes(title="추가 소요일(일)", tickformat=",d")
+            hist.update_yaxes(title=None, tickformat=",d")
+            hist.add_vline(x=st_["median"], line_dash="dash", line_color=ui.COLOR_REFERENCE, line_width=2,
+                           annotation_text=f"중앙값 {st_['median']:.0f}일", annotation_position="top right",
+                           annotation_font=dict(color=ui.COLOR_REFERENCE, size=12))
+            hist.update_layout(bargap=0.05)
+            st.plotly_chart(ui.style_figure(hist, 320), use_container_width=True)
             st.caption(
-                f"빨간 점선 = 중앙값 {st_['median']:.0f}일 · "
+                f"막대 높이 = 공고 건수 · 빨간 점선 = 중앙값 {st_['median']:.0f}일 · "
                 f"상한 초과 {len(d) - len(shown):,}건은 그래프에서 생략 · "
                 f"평균이 중앙값보다 크면 장기 소요 사례의 영향이 있습니다."
             )
@@ -577,11 +568,12 @@ def render():
             year_df.loc[m & ~year_df["is_2025q4"], ["delay_days"]].assign(구분="2025년 4분기 제외"),
         ])
         if not box_src.empty:
-            box = alt.Chart(box_src).mark_boxplot(extent=1.5, size=60).encode(
-                x=alt.X("구분:N", sort=["전체", "2025년 4분기 제외"], title=None),
-                y=alt.Y("delay_days:Q", title="추가 소요일(일)", axis=alt.Axis(format=",d")),
-            ).properties(height=320)
-            st.altair_chart(box, use_container_width=True)
+            box = px.box(box_src, x="구분", y="delay_days", color_discrete_sequence=[ui.COLOR_BAR],
+                         category_orders={"구분": ["전체", "2025년 4분기 제외"]})
+            box.update_xaxes(title=None)
+            box.update_yaxes(title=None, tickformat=",d")
+            st.plotly_chart(ui.style_figure(box, 320), use_container_width=True)
+            st.caption("세로축 = 추가 소요일(일) · 상자 = Q1~Q3, 가운데 선 = 중앙값, 점 = 1.5×IQR 밖 사례")
 
         st.subheader("90일 이내 연결률")
         st.dataframe(within_90_table(year_df), hide_index=True, use_container_width=True,
