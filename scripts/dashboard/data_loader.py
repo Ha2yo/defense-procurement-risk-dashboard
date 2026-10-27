@@ -15,7 +15,6 @@ TABLE_FILES = {
     "procure_plan": "procure_plan.parquet",
     "bid_notice": "bid_notice.parquet",
     "bid_result": "bid_result.parquet",
-    "contract_info": "contract_info.parquet",
     "bid_item": "bid_item.parquet",
 }
 
@@ -56,10 +55,6 @@ def load_notice(columns=None):
 
 def load_result(columns=None):
     return load_data("bid_result", columns)
-
-
-def load_contract(columns=None):
-    return load_data("contract_info", columns)
 
 
 def load_item(columns=None):

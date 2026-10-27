@@ -547,7 +547,6 @@ def data_readiness_audit(inputs: dict[str, pd.DataFrame], paths: dict,
                    'pblancSe','bidPartcptRegistClosDt','bsicExpt'],
         'result': ['noticeKey','bidResult','bidMth'],
         'plan': ['businessKey','bidMth','budgetAmount'],
-        'contract': [],  # 계약정보는 참고/감사용이며 2024년 KPI 산출에 필수 아님
         'items': ['businessKey','totlAmnt'],
         'mapping': ['orntCode','기관그룹'],
     }
@@ -570,7 +569,6 @@ def data_readiness_audit(inputs: dict[str, pd.DataFrame], paths: dict,
            '**가능**' if ready else '**보류 — 필수 자료 미확보. KPI 결과를 생성하지 않음.**','',
            '- 공식 4변수는 조달계획 예산과 품목명세 `totlAmnt`를 규정에 따라 연결해야 합니다.',
            '- 기관그룹은 공식 `orntCode` 매핑표의 `기관그룹`만 사용할 수 있습니다.',
-           '- 계약정보는 진단용이며 공식 사업규모금액에 임의로 넣지 않습니다.',
            '- 품목합계 결측은 값이 0이라는 뜻이 아니므로 가짜 품목 데이터로 보완하지 않습니다.',
            '- `bsicExpt`는 기존 5-4 탐색 비교에만 쓰고 공식 금액 5분위에 쓰지 않습니다.',
            ('- 필수 입력자료 5종의 스키마를 확인했습니다. 2024년 KPI 산출 단계로 진행합니다.'
@@ -788,7 +786,6 @@ def main():
     ap.add_argument('--result',default=None)
     ap.add_argument('--plan',default=None)
     ap.add_argument('--items',default=None)
-    ap.add_argument('--contract',default=None)
     ap.add_argument('--mapping',default=None)
     ap.add_argument('--output-dir',default=None)
     ap.add_argument('--self-test',action='store_true')
@@ -798,12 +795,10 @@ def main():
         return
     root=Path(args.project_root).resolve() if args.project_root else project_root()
     # 업로드된 CLEAN 자료의 실제 파일명으로 자동 검색한다.
-    # 계약정보는 참고 감사자료이며 품목명세나 사업규모금액을 대신하지 않는다.
     paths={
         'notice':find_input(root,args.notice,'bid_notice_clean_20210101_20251231','notice'),
         'result':find_input(root,args.result,'bid_result_clean_20210101_20251231','result'),
         'plan':find_input(root,args.plan,'procure_plan_clean_20210101_20251231','plan'),
-        'contract':find_input(root,args.contract,'contract_info_clean_20210101_20251231','contract',False),
         'items':find_input(root,args.items,'bid_item_clean_20210101_20251231','items',False),
         'mapping':find_input(root,args.mapping,'orntCode_codeVld4_all','mapping',False),
     }

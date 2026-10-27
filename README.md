@@ -1,7 +1,11 @@
 # 군수품 조달 유찰 위험 예측 대시보드 구축을 통한 조달 효율성 향상
 
-방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·계약정보·품목명세서, 2021~2025)를 이용해
+방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·품목명세서, 2021~2025)를 이용해
 신규 입찰공고의 유찰 위험을 사전에 식별하고, 과거 유사 공고를 빠르게 검토할 수 있는 Streamlit 대시보드를 만든다.
+
+**현재 프로젝트 범위:** 조달계획·입찰공고·입찰결과·품목명세서를 사용한다. **계약정보(`contract_info`)는 현행 분석·KPI 산정·대시보드 입력에서 제외**하며, 기존 계약 연계 코드는 `archive/contract/`에 보관한다. 계약정보 수집과 요구연도 복원은 현재 실행 순서에 포함되지 않는다.
+
+> **구분:** 입찰공고의 `계약방법(cntrctMth)`은 유찰 분석에 계속 사용하는 변수이며, 별도 데이터셋인 `계약정보(contract_info)`와 다르다.
 
 기준 문서: 프로젝트 정의서 · 데이터 항목정의서 · KPI 정의서 · 분석 계획표 · 잠재원인 우선순위표 · 연도별 결과 미확인 분포표
 
@@ -23,7 +27,7 @@ streamlit run app.py
 API_KEY_DATA_PORTAL=...
 ```
 
-모든 스크립트는 **프로젝트 루트에서** `python scripts/...` 형태로 실행한다
+현재 실행 대상 스크립트는 **프로젝트 루트에서** `python scripts/...` 형태로 실행한다. `archive/`의 코드는 기본 실행 대상이 아니다
 
 ---
 
@@ -34,7 +38,7 @@ API_KEY_DATA_PORTAL=...
 ├─ requirements.txt
 ├─ scripts/                  실행 순서 = 폴더 순서
 │  ├─ collection/            ① 데이터 수집 (OPEN API)
-│  ├─ preprocessing/         ② 정제·병합·계약 요구연도 복원
+│  ├─ preprocessing/         ② 조달계획·공고·결과·품목명세 정제 및 공고-결과 병합
 │  ├─ ornt/                  ③ 기관그룹 분류
 │  ├─ analysis/              ④ 분석 계획표 1~5번 (파일명 앞 번호 = 분석 번호)
 │  ├─ kpi/                   ⑤ 분석 계획표 6번: 공식 4변수 위험도·KPI 검증
@@ -45,29 +49,28 @@ API_KEY_DATA_PORTAL=...
 │  ├─ analysis/              분석 산출물 (기관 분류표, 공고기간·금액·후속공고 결과 등)
 │  └─ kpi/                   KPI 산출물
 ├─ docs/                     분석별 실행 가이드
-└─ archive/                  이전 기준 코드 (보관용, 현재 기준으로 실행하지 않음)
+└─ archive/                  이전 기준 코드 (보관용, 기본 실행 제외)
+   └─ contract/              계약정보 수집·요구연도 복원 코드 (현행 분석 범위 밖)
 ```
 
 ---
 
 ## 실행 순서
 
-프로젝트 루트에서 `python scripts/<폴더>/<파일>` 형태로, 표의 위에서부터 순서대로 실행한다. 결과 경로는 `data/` 아래 기준이다.
+프로젝트 루트에서 `python scripts/<폴더>/<파일>` 형태로 현재 사용 중인 파일을 표의 위에서부터 순서대로 실행한다. 결과 경로는 `data/` 아래 기준이며, **계약정보 수집·정제·복원 단계는 이 실행 순서에 포함되지 않는다.**
 
 ### ① 데이터 수집 — `scripts/collection/`
 | 파일 | 내용 → 결과 |
 |---|---|
 | `collect_data_plan.py` | 조달계획 → `raw/` |
 | `collect_data_list.py` | 입찰공고·입찰결과 → `raw/` |
-| `collect_data_contract.py` | 계약정보 → `raw/` |
 | `collect_data_item.py` | 품목명세서 → `raw/` |
 
 ### ② 정제·병합 — `scripts/preprocessing/`
 | 파일 | 내용 → 결과 |
 |---|---|
-| `raw_to_clean.py` | RAW → CLEAN (형식 변환, 완전 동일 중복 제거, 사업키·공고키·계약연결키 생성) → `clean/` |
+| `raw_to_clean.py` | 조달계획·입찰공고·입찰결과·품목명세 RAW → CLEAN (`clean/`). 현행 프로젝트에서는 계약정보 정제 옵션을 사용하지 않음 |
 | `merge_bid_data.py` | 입찰공고·입찰결과를 공고키로 병합, 공고 단위 집계, 판단보류 제외 → `kpi/bid_master_2021_2025.csv` |
-| `restore_contract_demand_year.py` | 계약정보 요구연도 복원, 5키 기준 낙찰공고–계약 연결 검증 → `analysis/contract_year_independent/` |
 | `check_item_amount.py` | 품목명세서 단가×수량과 총금액 일치 검증 (데이터 항목정의서 6.3) → `analysis/item_amount_check/` |
 
 ### ③ 기관그룹 분류 — `scripts/ornt/`
@@ -99,13 +102,16 @@ API_KEY_DATA_PORTAL=...
 
 ### ⑥ 대시보드 — `scripts/dashboard/`
 `streamlit run app.py` · 화면: 전체 유찰 현황 / 공고별 위험도·유사사례 / 유찰 요인 분석 / 유찰 후 지연 영향
-입력은 `data/dashboard/*.parquet`와 `data/analysis/ornt_code/orntCode_codeVld4_all.csv`.
+입력은 `data/dashboard/`의 현행 대시보드용 parquet(**계약정보 parquet 제외**)와 `data/analysis/ornt_code/orntCode_codeVld4_all.csv`이다.
+
+**계약정보 사용 범위:** 현재 KPI와 대시보드 화면 1~4에서는 `contract_info` 데이터셋을 사용하지 않는다. `data/dashboard/contract_info.parquet`가 남아 있더라도 **현행 입력 데이터로 취급하지 않는다.** 기존 계약정보 RAW·CLEAN 및 `data/analysis/contract_year_independent/`의 과거 산출물은 이번 README 정리만으로 삭제하거나 변경하지 않는다. 불필요한 파일 제거 여부는 참조 코드·Git 추적 상태를 검증한 뒤 별도 작업으로 결정한다.
 
 ---
 
 ## 분석 기준 요약
 - **분석 단위**: 공고키(`demandYear + orntCode + dcsNo + pblancNo + pblancOdr`) 기준 공고 1건
 - **결과 변수**: 유찰 = 1, 낙찰·순위확정 = 0. 결과 미확인·판단보류·수의계약은 제외
+- **데이터 범위**: 계약정보(`contract_info`) 미사용. 입찰공고의 계약방법(`cntrctMth`)은 분석 변수로 유지
 - **기간 구분**: 공고일(`pblancDate`) 기준 — 학습 2021~2023 / 예비 검증 2024 / 최종 평가 2025
 - **기초금액(`bsicExpt`)은 위험도에 사용하지 않음** (단가제 공고에 단가 입력 혼입) → 조달계획 예산·품목 총액으로 산정한 사업규모금액 사용
 - 상세 정의는 데이터 항목정의서·KPI 정의서를 따른다.
@@ -113,8 +119,12 @@ API_KEY_DATA_PORTAL=...
 ---
 
 ## archive/ (보관용)
+아래 파일·폴더는 **현재 수집→전처리→분석→KPI→대시보드 실행 경로에 포함되지 않는다.** 별도 과거 연구를 재현할 때는 코드와 입력 경로를 다시 확인한다.
+
 | 경로 | 내용 |
 |---|---|
+| `archive/contract/collect_data_contract.py` | 이전 계약정보 API 수집 코드. 현행 데이터 수집 대상에서 제외 |
+| `archive/contract/restore_contract_demand_year.py` | 이전 계약정보 요구연도 복원·계약 후보 연결 코드. 현행 전처리·KPI·대시보드에서는 미사용 |
 | `archive/kpi_3var/kpi_12_2024.py` | 이전 3변수(기관그룹×계약방법×사업구분) KPI. 4변수 비교 기준선 확인용 |
 | `archive/kpi1_statistical/` | 이전 KPI 1 동점 처리 통계 분석 ([가이드](docs/kpi1_statistical_guide.md)) |
 | `archive/notebooks/` | 초기 위험도 분석 설명 노트북 |
