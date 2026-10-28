@@ -58,10 +58,26 @@ n_mixed = df_master.loc[mixed, merge_keys].drop_duplicates().shape[0]
 df_master = df_master[~mixed]
 print(f'⚖️ 판단보류(유찰·낙찰 혼재) 제외: {n_mixed:,}건 ({mixed.sum():,}행)')
 
-# 5-2. 공고 단위로 묶기: 공고 1건 = 1행 (남은 공고는 품목 결과가 모두 같음)
+# 5-2. 공고 단위로 묶기
+# 낙찰 + 순위확정 혼합 시 낙찰 결과 행 우선
 before = len(df_master)
-df_master = df_master.drop_duplicates(subset=merge_keys, keep='first').reset_index(drop=True)
-print(f'📦 공고 단위로 묶음: {before:,}행 → {len(df_master):,}행')
+
+is_award = df_master['bidResult'].eq('낙찰').fillna(False)
+
+df_master = (
+    pd.concat([
+        df_master.loc[is_award],
+        df_master.loc[~is_award]
+    ])
+    .drop_duplicates(subset=merge_keys, keep='first')
+    .sort_index()
+    .reset_index(drop=True)
+)
+
+print(
+    f'📦 공고 단위로 묶음: '
+    f'{before:,}행 → {len(df_master):,}행'
+)
 
 # 6. 연도 컬럼 추출: 공고일(pblancDate) 기준
 #    (위험도는 공고 시점에 매기므로 공고일 기준. 개찰일 opengDate 열은 그대로 남겨 둠)
