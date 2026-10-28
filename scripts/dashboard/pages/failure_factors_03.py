@@ -36,13 +36,13 @@ EXCLUDE_REASON = {
     "기관그룹": "기관그룹 매핑 없음",
     "사업유형": "사업유형 결측",
     "계약·경쟁방식": "계약방법 결측",
-    "공고기간": "공고기간 계산 불가 또는 0일 이하",
+    "공고기간": "공고기간 계산 불가 또는 음수",
     AMOUNT: "사업규모금액 미확인",
     "공고 시기": "공고일 결측",
 }
 
-PERIOD_BINS = [0, 5, 7, 10, np.inf]
-PERIOD_LABELS = ["5일 이하", "6~7일", "8~10일", "11일 이상"]
+PERIOD_BINS = [-1, 5, 10, np.inf]  # 분석계획표 2와 같은 세 구간 (0일 포함, 음수는 제외)
+PERIOD_LABELS = ["5일 이하", "5일 초과~10일", "10일 초과"]
 QUARTER_LABELS = ["1분기(1~3월)", "2분기(4~6월)", "3분기(7~9월)", "4분기(10~12월)"]
 
 MIN_CATEGORY_SIZE = 30  # 계약·경쟁방식: 이보다 작은 범주는 '기타'
@@ -234,7 +234,7 @@ def prepare_base(notice, result, org_map, plan, item):
         (pblanc.dt.quarter.fillna(0).astype(int) - 1).clip(lower=-1), QUARTER_LABELS
     )
 
-    # 공고기간 = 참가등록마감일 - 공고일 (0일 이하는 이상값으로 제외)
+    # 공고기간 = 참가등록마감일 - 공고일 (음수는 이상값으로 제외)
     df["period_days"] = (close - pblanc).dt.days
     df["period_bin"] = pd.cut(df["period_days"], bins=PERIOD_BINS, labels=PERIOD_LABELS)
 

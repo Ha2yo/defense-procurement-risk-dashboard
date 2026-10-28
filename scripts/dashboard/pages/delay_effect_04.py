@@ -573,7 +573,10 @@ def render():
                              category_orders={"구분": ["전체", "2025년 4분기 제외"]})
                 box.update_xaxes(title=None)
                 box.update_yaxes(title=None, tickformat=",d")
-                st.plotly_chart(ui.style_figure(box, 320), use_container_width=True)
+                box = ui.style_figure(box, 350)
+                # 세로축 이름은 글자를 돌리지 않고 화면 1처럼 차트 제목에 단위와 함께 쓴다
+                box.update_layout(title="추가 소요일 분포 (단위: 일)", margin=dict(t=55))
+                st.plotly_chart(box, use_container_width=True)
                 st.caption("세로축 = 추가 소요일(일) · 상자 = Q1~Q3, 가운데 선 = 중앙값, 점 = 1.5×IQR 밖 사례")
 
         with st.container(border=True):

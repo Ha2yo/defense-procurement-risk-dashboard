@@ -8,8 +8,8 @@ COLOR_MUTED = "#D3D3D3"      # 순위 비교에서 뺀 범주 (예: 기타)
 COLOR_REFERENCE = "#C0392B"  # 전체 평균·중앙값 기준선
 COLOR_TEXT = "#1F2937"       # 막대 옆 숫자 글자색
 BAR_STEP = 46                # 가로 막대 한 칸 높이(px)
-# 기준선이 글자를 지나가도 읽히도록 글자 둘레에 두르는 흰 테두리(halo)
-TEXT_HALO = "0 0 3px white, 0 0 3px white, 0 0 3px white"
+# 기준선이 글자를 지나가도 읽히도록 글자 둘레를 흰색으로 채움 (흐린 테두리 대신 사방으로 민 흰 그림자로 바탕처럼 덮는다)
+TEXT_HALO = ", ".join(f"{x}px {y}px 0 white" for x in (-4, -2, 0, 2, 4) for y in (-4, -2, 0, 2, 4) if x or y)
 
 
 def style_figure(fig, height):

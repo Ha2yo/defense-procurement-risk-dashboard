@@ -20,6 +20,8 @@ from scripts.dashboard.data_loader import (
 BASE_KEYS = ["기관그룹", "busiDivs", "cntrctMth"]
 STEPS = [BASE_KEYS, ["기관그룹", "busiDivs"], ["기관그룹"], []]
 AMOUNT_KEYS = BASE_KEYS + ["사업규모구간"]
+# 화면에 보여 줄 조건 이름 (데이터 열 이름 대신 한글)
+KEY_LABELS = {"기관그룹": "기관그룹", "busiDivs": "사업구분", "cntrctMth": "계약방법", "사업규모구간": "금액 구간"}
 AMOUNT_STEPS = [AMOUNT_KEYS] + STEPS
 MIN_SAMPLE = 10
 TRAIN_START, TRAIN_END, TARGET_YEAR = 2021, 2024, 2025
@@ -303,7 +305,8 @@ def get_risk(condition, reference, steps=STEPS):
         if n >= MIN_SAMPLE:
             f = int(row["근거유찰건수"])
             return {"위험도": f / n, "근거공고수": n, "근거유찰건수": f,
-                    "적용단계": stage, "적용변수": cols, "적용조건": " × ".join(cols) if cols else "전체"}
+                    "적용단계": stage, "적용변수": cols,
+                    "적용조건": " × ".join(KEY_LABELS.get(c, c) for c in cols) if cols else "전체"}
     raise ValueError("위험도 산정용 과거 공고가 10건 미만입니다.")
 
 
@@ -348,14 +351,17 @@ def compare_risk_by_level(condition, amount_reference):
 
 
 def risk_comparison_chart(comparison):
-    """가장 높은 유찰률의 막대만 은은하게 강조한다."""
+    """4·3·2·1변수 과거 유찰률 비교. 강조색은 쓰지 않는다.
+
+    10건 미만 단계는 빠지므로 맨 위 막대가 곧 대표 위험도에 쓰인 단계라 색으로 따로 표시할 필요가 없다.
+    """
     chart_data = comparison.dropna(subset=["유찰률"]).copy()
     if chart_data.empty:
         return None
 
-    highest = chart_data["유찰률"].max()
-    chart_data["강조"] = np.where(chart_data["유찰률"].eq(highest), "최고", "일반")
-    chart_data["라벨"] = chart_data["유찰률"].map(lambda value: f"{value:.2f}%")
+    chart_data["강조"] = "일반"
+    # 화면 3처럼 표본 수를 함께 적어 적은 표본의 높은 비율을 바로 알아볼 수 있게 한다
+    chart_data["라벨"] = [f"{v:.2f}%  (n={n:,})" for v, n in zip(chart_data["유찰률"], chart_data["근거공고수"])]
 
     order = ["4변수", "3변수", "2변수", "1변수"]
     fig = px.bar(
@@ -368,7 +374,8 @@ def risk_comparison_chart(comparison):
                                     "<extra></extra>")
     # 가로 막대는 아래에서 위로 그려지므로 순서를 뒤집어 4변수가 맨 위에 오게 한다
     fig.update_yaxes(title=None, categoryorder="array", categoryarray=order[::-1])
-    fig.update_xaxes(title="과거 유찰률(%)", range=[0, chart_data["유찰률"].max() + 5])
+    # 막대 끝 '값  (n=표본 수)' 라벨이 잘리지 않도록 최댓값의 1.3배까지
+    fig.update_xaxes(title="과거 유찰률(%)", range=[0, chart_data["유찰률"].max() * 1.3])
     return ui.style_figure(fig, ui.hbar_height(len(chart_data)))
 
 
@@ -768,6 +775,10 @@ def render():
     with st.container(border=True):
         st.subheader("위험도 산정 근거")
         st.write(f'**적용 단계:** {risk["적용단계"]}단계 · {risk["적용조건"]}')
+        if risk["적용변수"]:
+            # 어떤 값끼리 묶인 과거 공고인지 한눈에 보이도록 조건마다 실제 값을 적는다
+            st.write("**적용 조건:** " + " · ".join(
+                f"{KEY_LABELS.get(c, c)} {inp.get(c)}" for c in risk["적용변수"]))
         st.write(f'**과거 유찰:** {risk["근거유찰건수"]:,}건 / **비유찰:** {risk["근거공고수"] - risk["근거유찰건수"]:,}건')
         st.write(f'**산식:** {risk["근거유찰건수"]:,} ÷ {risk["근거공고수"]:,} × 100 = {risk["위험도"]*100:.2f}%')
         if risk["적용단계"] > 1:
@@ -778,6 +789,7 @@ def render():
 
     with st.expander("4·3·2·1변수 위험도 비교", expanded=False):
         comparison = compare_risk_by_level(inp, amount_reference)
+        applied = f"{len(risk['적용변수'])}변수" if risk["적용변수"] else None  # 1단계=4변수 … 4단계=1변수
         chart = risk_comparison_chart(comparison)
 
         if chart is not None:
@@ -793,9 +805,9 @@ def render():
             )
 
         st.caption(
-            "막대는 각 변수 조합의 관측 유찰률을 독립적으로 비교한 값입니다. "
-            "가장 높은 막대가 최종 선택 모델이라는 의미는 아닙니다. "
-            "대표 위험도는 위의 4→3→2→1변수 단계적 대체 규칙을 따릅니다"
+            f"맨 위 막대 = 대표 위험도에 쓰인 단계({applied or '전체'}). "
+            "나머지는 조건을 넓히거나 좁혔을 때의 과거 유찰률로, 비교용입니다. "
+            "대표 위험도는 4→3→2→1변수 순서로 과거 공고가 10건 이상인 첫 단계를 씁니다"
         )
 
         boundaries_text = " / ".join(f"{value:,.0f}" for value in boundaries)
@@ -812,11 +824,12 @@ def render():
         columns = ["공고일", "pblancNo", "bidNm", "ornt", "기관그룹", "busiDivs", "cntrctMth", "결과상태", "noticeKey"]
         view = history.sort_values(["공고일", "noticeKey"], ascending=[False, True]).head(100)[columns].copy()
         view["공고일"] = view["공고일"].dt.strftime("%Y-%m-%d")
-        st.dataframe(view.rename(columns={"pblancNo":"공고번호", "bidNm":"공고명", "ornt":"발주기관",
-                                          "busiDivs":"사업구분", "cntrctMth":"계약방법", "결과상태":"실제결과"}),
-                     hide_index=True, use_container_width=True)
+        korean = {"pblancNo": "공고번호", "bidNm": "공고명", "ornt": "발주기관",
+                  "busiDivs": "사업구분", "cntrctMth": "계약방법", "결과상태": "실제결과", "noticeKey": "공고키"}
+        st.dataframe(view.rename(columns=korean), hide_index=True, use_container_width=True)
         download_cols = history[columns].copy()
         download_cols["공고일"] = download_cols["공고일"].dt.strftime("%Y-%m-%d")
+        download_cols = download_cols.rename(columns=korean)
         st.download_button("전체 유사공고 CSV", download_cols.to_csv(index=False).encode("utf-8-sig"),
                            file_name="historical_comparable_notices.csv", mime="text/csv")
     st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다")
