@@ -2,12 +2,14 @@
 import importlib
 import os
 
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from scripts.dashboard import components as ui
 from scripts.dashboard.data_loader import load_notice, load_result
+from scripts.dashboard.pages.failure_factors_03 import BREAK_GAP, wave_gap_path  # 화면 3과 같은 물결 생략 표시
 
 # 파일명이 숫자로 시작해 일반 import 문을 쓸 수 없으므로 importlib로 불러온다
 prepare_bid_result = importlib.import_module(
@@ -15,6 +17,9 @@ prepare_bid_result = importlib.import_module(
 ).prepare
 
 PRIVATE_KEYWORD = "수의"  # 계약방법에 이 글자가 있으면 수의계약 (화면 2·3과 같은 기준)
+MIN_CATEGORY_SIZE = 30  # 계약방법: 결과확정 공고가 이보다 적으면 순위 비교에서 분리 (화면 3과 같은 기준)
+ETC = "기타"
+AXIS_PAD = 1.3  # x축 끝 = 최댓값 × 1.3 (막대 끝 '값  (n=표본 수)' 라벨 자리)
 
 
 # ============================================================
@@ -83,6 +88,39 @@ def group_summary(df, column):
     return out
 
 
+def split_small(summary, column):
+    """결과확정 공고 30건 미만 범주를 한 행으로 묶어 따로 돌려줍니다 (화면 3 계약·경쟁방식과 같은 방식).
+
+    하나뿐이면 그 범주 이름을, 둘 이상이면 '기타'를 이름으로 쓴다.
+    반환: (비교 대상 요약표, 소표본 행 또는 빈 표, {묶인 범주: 공고 수})
+    """
+    is_small = summary["결과확정 공고 수"] < MIN_CATEGORY_SIZE
+    small = summary.loc[is_small]
+    if small.empty or is_small.all():  # 모두 소표본이면 비교 대상이 없으므로 나누지 않는다
+        return summary, summary.iloc[0:0], {}
+    members = dict(zip(small[column], small["결과확정 공고 수"]))
+    label = small[column].iloc[0] if len(small) == 1 else ETC
+    total, fails = small["결과확정 공고 수"].sum(), small["유찰 공고 수"].sum()
+    merged = pd.DataFrame({column: [label], "결과확정 공고 수": [total],
+                           "유찰 공고 수": [fails], "유찰률(%)": [fails / total * 100]})
+    return summary.loc[~is_small], merged, members
+
+
+def axis_limit(top_value, small_value, unit):
+    """x축 끝(비교 대상 최댓값의 AXIS_PAD배)과, 소표본 유찰률이 그보다 훨씬 클 때 오른쪽 축 구간 (없으면 None).
+
+    오른쪽 축은 화면 3과 같이 소표본 값 바로 아래 5 단위 눈금에서 한 칸 더 내려 시작하고 15만큼 보여 준다.
+    그 시작점이 왼쪽 축 끝보다 작으면 축을 나누지 않고 값까지 늘린다.
+    """
+    axis_max = top_value * AXIS_PAD
+    if small_value is None or small_value <= axis_max:
+        return axis_max, None
+    lo = np.floor(small_value / 5) * 5 - 5
+    if unit != "%" or lo <= axis_max:
+        return small_value * AXIS_PAD, None
+    return axis_max, (lo, lo + 15)
+
+
 # ============================================================
 # 2. Streamlit 화면
 # ============================================================
@@ -149,27 +187,76 @@ def render():
                 st.info("결과확정 공고가 없습니다")
                 continue
             sort_col = "유찰 공고 수" if order == "유찰 건수" else "유찰률(%)"
-            
+
+            # 계약방법은 공고가 아주 적은 방식의 유찰률이 크게 흔들리므로 순위에서 빼고 맨 아래에 둔다
+            small, members = summary.iloc[0:0], {}
+            if col == "계약방법":
+                summary, small, members = split_small(summary, col)
             summary = summary.sort_values([sort_col, "결과확정 공고 수"], ascending=False)
+            top_value = summary[sort_col].max()
+            summary = pd.concat([summary, small], ignore_index=True)
             unit = "건" if sort_col == "유찰 공고 수" else "%"
-            fig = px.bar(summary, x=sort_col, y=col, orientation="h",
+            is_small = summary.index >= len(summary) - len(small)
+            # 화면 3처럼 막대 끝에 표본 수(결과확정 공고 수)를 함께 적는다
+            summary["label"] = [(f"{v:,.0f}건" if unit == "건" else f"{v:.2f}%") + f"  (n={n:,})"
+                                for v, n in zip(summary[sort_col], summary["결과확정 공고 수"])]
+            # 소표본 막대가 훨씬 길면 화면 3처럼 x축을 둘로 나누고 중간을 물결로 생략한다
+            small_value = summary.loc[is_small, sort_col].iloc[0] if is_small.any() else None
+            axis_max, broken = axis_limit(top_value, small_value, unit)
+            summary["bar"] = summary[sort_col]
+            if broken:
+                summary.loc[is_small, "bar"] = axis_max  # 왼쪽 축에서는 축 끝까지만
+                summary.loc[is_small, "label"] = ""      # 숫자는 오른쪽 축 막대에 붙인다
+            fig = px.bar(summary, x="bar", y=col, orientation="h", text="label",
                          custom_data=["유찰 공고 수", "결과확정 공고 수", "유찰률(%)"])
-            # 화면 3과 같이 1위 막대만 진한 색으로 강조
-            is_top = summary[sort_col].eq(summary[sort_col].max())
+            # 화면 3과 같이 1위 막대만 진한 색으로 강조, 소표본 묶음은 회색
+            is_top = summary[sort_col].eq(top_value) & ~is_small
+            hover = ("%{y}<br>유찰 %{customdata[0]:,}건 / 결과확정 %{customdata[1]:,}건"
+                     "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>")
             fig.update_traces(
-                marker_color=[ui.COLOR_HIGHLIGHT if t else ui.COLOR_BASE for t in is_top],
-                texttemplate="%{x:,.0f}건" if unit == "건" else "%{x:.2f}%", textposition="outside",
-                hovertemplate="%{y}<br>유찰 %{customdata[0]:,}건 / 결과확정 %{customdata[1]:,}건"
-                              "<br>유찰률 %{customdata[2]:.2f}%<extra></extra>",
+                marker_color=[ui.COLOR_MUTED if s else ui.COLOR_HIGHLIGHT if t else ui.COLOR_BASE
+                              for s, t in zip(is_small, is_top)],
+                textposition="outside", hovertemplate=hover,
             )
             # 가로 막대는 아래에서 위로 그려지므로 정렬 순서를 뒤집어 첫 항목이 맨 위에 오게 한다
             fig.update_yaxes(title=None, categoryorder="array", categoryarray=list(summary[col])[::-1])
-            fig.update_xaxes(title=None, range=[0, summary[sort_col].max() * 1.15])
+            fig.update_xaxes(title=None, range=[0, axis_max])
+            if broken:
+                lo, hi = broken
+                row = summary.loc[is_small].iloc[0]
+                fig.add_bar(
+                    y=[row[col]], x=[row[sort_col] - lo], base=[lo], orientation="h", xaxis="x2",
+                    marker_color=ui.COLOR_MUTED, textposition="outside",
+                    text=[f"{row[sort_col]:.2f}%  (n={row['결과확정 공고 수']:,})"],
+                    customdata=[[row["유찰 공고 수"], row["결과확정 공고 수"], row["유찰률(%)"]]],
+                    hovertemplate=hover, showlegend=False,
+                )
+                # 두 축의 1%당 길이가 같도록 차트 폭을 각 축의 구간 길이에 비례해 나눈다
+                left_end = (1 - BREAK_GAP) * axis_max / (axis_max + hi - lo)
+                fig.update_layout(
+                    xaxis=dict(domain=[0, left_end], dtick=5),
+                    xaxis2=dict(domain=[left_end + BREAK_GAP, 1], range=[lo, hi], anchor="y", dtick=5),
+                )
+                # 소표본 막대는 맨 아래(y=0)에 있으므로 그 위치에 물결 틈을 그린다
+                fig.add_shape(type="path", xref="paper", yref="y", fillcolor="white", line=dict(width=0),
+                              layer="above", path=wave_gap_path(left_end - 0.004, 0, BREAK_GAP + 0.008, 0.003))
             fig = ui.style_figure(fig, ui.hbar_height(len(summary)) + 30)
             fig.update_layout(title=f"{col}별 {sort_col.replace('(%)', '')} (단위: {unit})",
                               margin=dict(t=55))  # 차트 제목 자리
             st.plotly_chart(fig, use_container_width=True)
-            count_leader = summary.sort_values("유찰 공고 수", ascending=False).iloc[0]
+            st.caption("n = 결과확정 공고 수 (유찰률의 분모)")
+            if members:
+                label = summary[col].iloc[-1]
+                reason = "공고가 적어 유찰률이 크게 흔들리므로 순위 비교·강조에서 제외하고 회색으로 맨 아래에 표시합니다"
+                if label == ETC:
+                    listed = " · ".join(f"{k} {v:,}건" for k, v in members.items())
+                    st.caption(f"※ 기타 = 결과확정 공고 {MIN_CATEGORY_SIZE}건 미만 계약방법 묶음 ({listed}). {reason}")
+                else:
+                    st.caption(f"※ {label}: 결과확정 공고 {members[label]:,}건 ({MIN_CATEGORY_SIZE}건 미만). {reason}")
+            if broken:
+                st.caption(f"※ {summary[col].iloc[-1]} 유찰률({small_value:.1f}%)이 다른 범주보다 훨씬 커서 "
+                           f"x축을 나누고 중간을 생략(물결 표시)했습니다. 오른쪽 축은 {broken[0]:.0f}~{broken[1]:.0f}% 구간")
+            count_leader = summary.loc[~is_small].sort_values("유찰 공고 수", ascending=False).iloc[0]
             total_failed = int(confirmed["failed"].sum())
             leader_failed = int(count_leader["유찰 공고 수"])
             share = leader_failed / total_failed * 100 if total_failed else 0
@@ -180,5 +267,5 @@ def render():
                 f"{total_failed:,}건 중 {share:.1f}%를 차지합니다"
             )
             
-            st.dataframe(summary, hide_index=True, use_container_width=True,
+            st.dataframe(summary.drop(columns=["label", "bar"]), hide_index=True, use_container_width=True,
                          column_config={"유찰률(%)": st.column_config.NumberColumn(format="%.2f%%")})
