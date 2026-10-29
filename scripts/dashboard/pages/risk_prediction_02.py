@@ -3,6 +3,8 @@
 공고 단위·공고일 기준 2021~2024년 결과확정 경쟁성 공고만 근거로 사용.
 2025년 결과는 산정에 사용하지 않고 선택 공고의 사후 결과 표시용으로만 사용.
 """
+import re
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -386,6 +388,169 @@ def comparable_notices(train, condition, cols):
     return train.loc[mask].copy()
 
 
+# ============================================================
+# 과거 사례 키워드 검색 (참고 기능: 위험도 산정에는 쓰지 않는다)
+# ============================================================
+KEYWORD_YEARS = (2021, 2025)
+# 공고명에서 품목이 아닌 흔한 말 (구매·용역 같은 사업 형태, 긴급 같은 공고 구분 등)
+KEYWORD_STOP = {"구매", "용역", "제조", "납품", "계약", "긴급", "부대조달", "부대계약", "및", "등", "외", "설치",
+                "구매설치", "제조설치", "생산제조", "업체", "선정", "재공고", "연간", "단가", "총액", "사업"}
+CONFIRMED_RESULTS = {"유찰", "낙찰", "순위확정"}
+
+
+def normalize_name(series):
+    """공고명 비교용: 띄어쓰기를 없애 '방향밸브'와 '방향 밸브'를 같게 본다."""
+    return series.astype("string").fillna("").str.replace(r"\s+", "", regex=True)
+
+
+def bid_keywords(name, limit=4):
+    """공고명에서 품목 키워드 후보를 앞에서부터 뽑는다. 첫 후보가 대개 품목명(예: '방탄복, 조끼용')."""
+    s = str(name or "").replace("＇", "'").replace("‘", "'").replace("’", "'")
+    s = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", s)                      # (긴급)·(25F002-B) 같은 괄호
+    s = re.sub(r"(?:[0-9A-Za-z가-힣]{1,8}-){2,}", " ", s)             # 25-F-·22-조달- 같은 관리 코드
+    s = re.sub(r"'?\d{2,4}\s*년도?|'\d{2}|~", " ", s)                  # 연도
+    s = re.sub(r"\d+\s*(?:종|항목|품목|건|식|차|개소|대)", " ", s)       # 수량
+    tokens = [t for t in re.split(r"[\s,·/\-_'\"]+", s) if t]
+    tokens = [t for t in tokens
+              if len(t) >= 2 and t not in KEYWORD_STOP and not re.fullmatch(r"[0-9A-Za-z]+", t)]
+    return list(dict.fromkeys(tokens))[:limit]                         # 중복 제거, 앞쪽 우선
+
+
+def keyword_pool(data):
+    """검색 대상: 2021~2025년 경쟁성 공고 (취소공고·수의계약 제외, 결과 미확인 포함)."""
+    is_private = data["cntrctMth"].astype("string").str.contains("수의", na=False, regex=False)
+    is_cancelled = data["pblancSe"].astype("string").str.strip().eq("취소공고").fillna(False)
+    pool = data.loc[data["연도"].between(*KEYWORD_YEARS) & ~is_private & ~is_cancelled].copy()
+    pool["개찰일"] = parse_datetime(pool["opengDt"]).dt.normalize()
+    pool["검색명"] = normalize_name(pool["bidNm"])
+    pool["결과"] = pool["결과상태"].where(pool["결과상태"].isin(CONFIRMED_RESULTS), "결과 미확인")
+    return pool
+
+
+def keyword_search(pool, keywords, cutoff=None, exclude_key=None, business=None, org_code=None):
+    """키워드를 모두 포함한 공고. cutoff(선택 공고의 공고일)보다 먼저 개찰된 공고는 '이전', 나머지는 '이후'.
+
+    정렬: 이전 → 이후, 같은 기관 먼저, 최신순.
+    """
+    mask = pd.Series(True, index=pool.index)
+    for word in keywords:
+        mask &= pool["검색명"].str.contains(re.sub(r"\s+", "", word), regex=False, na=False)
+    if exclude_key:
+        mask &= pool["noticeKey"].astype(str).ne(str(exclude_key))
+    if business:
+        mask &= pool["busiDivs"].astype("string").eq(business).fillna(False)
+    found = pool.loc[mask].copy()
+    when = found["개찰일"].fillna(found["공고일"])  # 개찰일이 없으면 공고일로 판단
+    found["시점"] = "이전" if cutoff is None else np.where(when < cutoff, "이전", "이후")
+    found["_같은기관"] = found["orntCode"].astype("string").eq(org_code).fillna(False) if org_code else False
+    return found.sort_values(["시점", "_같은기관", "공고일"], ascending=[True, False, False])
+
+
+def keyword_view(found):
+    """화면 표 (한글 열 이름)."""
+    view = pd.DataFrame({
+        "시점": found["시점"].map({"이전": "공고 전", "이후": "이후 공고"}),
+        "공고일": found["공고일"].dt.strftime("%Y-%m-%d"),
+        "개찰일": found["개찰일"].dt.strftime("%Y-%m-%d"),
+        "발주기관": found["ornt"],
+        "공고명": found["bidNm"],
+        "사업구분": found["busiDivs"],
+        "계약방법": found["cntrctMth"],
+        "금액 구간": found["사업규모구간"],
+        "결과": found["결과"],
+        "공고키": found["noticeKey"],
+    })
+    return view.reset_index(drop=True)
+
+
+def style_keyword_view(view):
+    """결과 글자색(유찰 빨강·낙찰 파랑·미확인 회색), 이후 공고 행은 전체를 회색으로."""
+    def row_style(row):
+        styles = [""] * len(row)
+        if row["시점"] == "이후 공고":
+            styles = ["color: #9CA3AF"] * len(row)
+        color = RESULT_COLORS.get(row["결과"], "#6B7280")
+        styles[list(row.index).index("결과")] = f"color: {color}; font-weight: 600"
+        return styles
+    return view.style.apply(row_style, axis=1)
+
+
+def render_keyword_search(pool, inp):
+    """'공고명 키워드 검색' 탭. 키워드 후보는 공고명에서 뽑고, 후보마다 검색 대상 공고 수를 보여 준다."""
+    cutoff = inp.get("공고일")
+    cutoff = pd.Timestamp(cutoff) if cutoff is not None and pd.notna(cutoff) else None
+    name = inp.get("공고명") or ""
+    exclude = inp.get("noticeKey")
+    others = pool if not exclude else pool.loc[pool["noticeKey"].astype(str).ne(str(exclude))]
+    suggested = bid_keywords(name)
+    counts = {w: int(others["검색명"].str.contains(w, regex=False, na=False).sum()) for w in suggested}
+    # 기본 키워드: 앞의 두 후보를 함께 써서 결과가 있으면 그대로(예: '발칸'+'어댑터'),
+    # 없으면 첫 후보만. 첫 단어만으로는 장비명·수식어('발칸', '냉동')라 너무 넓게 잡히는 경우가 많다
+    default = suggested[:1]
+    if len(suggested) >= 2:
+        both = others["검색명"].str.contains(suggested[0], regex=False, na=False) \
+            & others["검색명"].str.contains(suggested[1], regex=False, na=False)
+        if both.any():
+            default = suggested[:2]
+    # 공고마다 선택 상태가 새로 시작되도록 키에 공고를 넣는다
+    key = f"kw_{exclude or abs(hash(name))}"
+
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        picked = st.multiselect(
+            "키워드 (공고명에서 추천 · 괄호 안은 검색 대상 공고 수)", suggested,
+            default=default, key=f"{key}_pick", format_func=lambda w: f"{w} ({counts.get(w, 0):,})",
+            placeholder="추천 키워드가 없습니다. 오른쪽에 직접 입력하세요" if not suggested else "키워드를 고르세요",
+        )
+    with c2:
+        typed = st.text_input("직접 입력 (쉼표로 여러 개)", key=f"{key}_typed")
+    same_business = st.checkbox(f"같은 사업구분({inp.get('busiDivs')})만", value=False, key=f"{key}_biz")
+    keywords = picked + [w.strip() for w in typed.split(",") if w.strip()]
+    if not keywords:
+        st.info("키워드를 하나 이상 고르거나 입력해 주세요")
+        return
+
+    found = keyword_search(pool, keywords, cutoff, exclude,
+                           inp.get("busiDivs") if same_business else None, inp.get("orntCode"))
+    first = pool["공고일"].min()
+    span = (f"{first:%Y-%m-%d} ~ {cutoff - pd.Timedelta(days=1):%Y-%m-%d} 개찰분 (선택 공고의 공고일 기준)"
+            if cutoff is not None else f"{KEYWORD_YEARS[0]}~{KEYWORD_YEARS[1]}년 전체")
+    before = found.loc[found["시점"].eq("이전")]
+    after = found.loc[found["시점"].eq("이후")]
+    judged = before.loc[before["결과"].isin(CONFIRMED_RESULTS)]
+    fails = int(judged["결과"].eq("유찰").sum())
+
+    st.write(f"**공고 시점 기준** ({span}): "
+             + (f"결과확정 {len(judged):,}건 중 유찰 {fails:,}건 ({fails / len(judged) * 100:.1f}%, n={len(judged):,})"
+                if len(judged) else "결과가 확정된 공고 없음")
+             + (f" · 결과 미확인 {len(before) - len(judged):,}건" if len(before) > len(judged) else ""))
+    if 0 < len(judged) < MIN_SAMPLE:
+        st.warning(f"결과확정 공고가 {MIN_SAMPLE}건 미만이라 유찰률은 참고만 하세요 (위험도 산정과 같은 기준)")
+    if len(after):
+        a_judged = after.loc[after["결과"].isin(CONFIRMED_RESULTS)]
+        detail = (f"결과확정 {len(a_judged):,}건 중 유찰 {int(a_judged['결과'].eq('유찰').sum()):,}건"
+                  if len(a_judged) else "결과확정 없음")
+        st.caption(f"이후 같은 키워드 공고 {len(after):,}건 ({detail}) · "
+                   "공고 당시에는 알 수 없던 사후 정보로, 표 아래쪽에 회색으로 표시")
+
+    if found.empty:
+        single = {w: int(others["검색명"].str.contains(re.sub(r"\s+", "", w), regex=False, na=False).sum())
+                  for w in keywords}
+        st.info("검색 결과가 없습니다. 키워드를 하나 줄여 보세요 · 키워드별 단독 검색 건수: "
+                + " · ".join(f"{w} {n:,}건" for w, n in single.items()))
+        return
+
+    view = keyword_view(found)
+    shown = view.head(300)
+    st.dataframe(style_keyword_view(shown), hide_index=True, use_container_width=True, height=320)
+    st.caption(f"{len(view):,}건 중 {len(shown):,}건 표시 · 같은 기관 공고 먼저, 최신순"
+               + (" · 전체는 CSV로 받으세요" if len(view) > len(shown) else ""))
+    st.download_button("검색 결과 CSV", view.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="keyword_search_notices.csv", mime="text/csv", key=f"{key}_csv")
+    st.caption("공고명에 키워드가 모두 들어 있는 공고를 찾은 참고 사례이며, 위험도 산정에는 쓰지 않습니다. "
+               "공고명 표현이 기관마다 달라 비슷한 품목이 빠지거나 다른 품목이 섞일 수 있습니다")
+
+
 def candidates(df, year):
     """선택 가능한 공고만 노출. 취소공고·수의계약·개찰일 역전 공고는 검색에서 제외한다.
 
@@ -663,6 +828,7 @@ def render():
                         "mode": "공고 선택", "noticeKey": key, "기관그룹": str(selected["기관그룹"]),
                         "busiDivs": str(selected["busiDivs"]), "cntrctMth": str(selected["cntrctMth"]),
                         "공고명": str(selected["bidNm"]), "발주기관": str(selected["ornt"]),
+                        "orntCode": str(selected["orntCode"]), "공고일": selected["공고일"],
                         "실제결과": str(selected["결과상태"]),
                         "형제결과": selected["형제결과"], "형제출처": selected["형제출처"],
                         "형제이력": selected["형제이력"],
@@ -700,6 +866,9 @@ def render():
                 method = st.selectbox("계약방법", methods, index=None, placeholder="계약방법을 선택하세요")
             manual_amount = st.number_input("사업금액 (원) — 4변수 위험도용", min_value=0, value=0, step=1_000_000,
                                             help="0원은 금액 미입력을 뜻하며, 이 경우 3변수 위험도로 대체합니다")
+            manual_name = st.text_input("공고명 (선택) — 과거 사례 키워드 검색용", placeholder="예: 냉동 핫도그 구매",
+                                        help="적으면 아래 '공고명 키워드 검색'에 키워드 후보가 자동으로 나옵니다. "
+                                             "위험도 산정에는 쓰지 않습니다")
             submit_manual = st.form_submit_button("입력 조건 분석", type="primary")
         if submit_manual:
             if not all((org, business, method)):
@@ -709,7 +878,8 @@ def render():
                     "기관그룹": org, "busiDivs": business, "cntrctMth": method,
                     "사업규모금액": manual_amount if manual_amount > 0 else None,
                     "사업규모구간": amount_bin(manual_amount, boundaries),
-                    "금액출처": "직접 입력" if manual_amount > 0 else "금액 미입력"}
+                    "금액출처": "직접 입력" if manual_amount > 0 else "금액 미입력",
+                    "공고명": manual_name.strip(), "공고일": None}
 
     inp = st.session_state.get("risk_input")
     if inp is not None:
@@ -820,16 +990,22 @@ def render():
 
     with st.container(border=True):
         st.subheader("과거 유사공고")
-        st.caption(f'적용 조건과 일치하는 2021~2024년 결과확정 경쟁성 공고 {len(history):,}건 중 최근 100건을 표시합니다')
-        columns = ["공고일", "pblancNo", "bidNm", "ornt", "기관그룹", "busiDivs", "cntrctMth", "결과상태", "noticeKey"]
-        view = history.sort_values(["공고일", "noticeKey"], ascending=[False, True]).head(100)[columns].copy()
-        view["공고일"] = view["공고일"].dt.strftime("%Y-%m-%d")
-        korean = {"pblancNo": "공고번호", "bidNm": "공고명", "ornt": "발주기관",
-                  "busiDivs": "사업구분", "cntrctMth": "계약방법", "결과상태": "실제결과", "noticeKey": "공고키"}
-        st.dataframe(view.rename(columns=korean), hide_index=True, use_container_width=True)
-        download_cols = history[columns].copy()
-        download_cols["공고일"] = download_cols["공고일"].dt.strftime("%Y-%m-%d")
-        download_cols = download_cols.rename(columns=korean)
-        st.download_button("전체 유사공고 CSV", download_cols.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="historical_comparable_notices.csv", mime="text/csv")
-    st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다")
+        tab_cond, tab_keyword = st.tabs(["조건이 같은 공고", "공고명 키워드 검색"])
+        with tab_cond:
+            st.caption(f'적용 조건과 일치하는 2021~2024년 결과확정 경쟁성 공고 {len(history):,}건 중 최근 100건을 표시합니다')
+            columns = ["공고일", "pblancNo", "bidNm", "ornt", "기관그룹", "busiDivs", "cntrctMth", "결과상태", "noticeKey"]
+            view = history.sort_values(["공고일", "noticeKey"], ascending=[False, True]).head(100)[columns].copy()
+            view["공고일"] = view["공고일"].dt.strftime("%Y-%m-%d")
+            korean = {"pblancNo": "공고번호", "bidNm": "공고명", "ornt": "발주기관",
+                      "busiDivs": "사업구분", "cntrctMth": "계약방법", "결과상태": "실제결과", "noticeKey": "공고키"}
+            st.dataframe(view.rename(columns=korean), hide_index=True, use_container_width=True)
+            download_cols = history[columns].copy()
+            download_cols["공고일"] = download_cols["공고일"].dt.strftime("%Y-%m-%d")
+            download_cols = download_cols.rename(columns=korean)
+            st.download_button("전체 유사공고 CSV", download_cols.to_csv(index=False).encode("utf-8-sig"),
+                               file_name="historical_comparable_notices.csv", mime="text/csv")
+            st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다")
+        with tab_keyword:
+            st.caption(f"공고명 키워드로 {KEYWORD_YEARS[0]}~{KEYWORD_YEARS[1]}년 경쟁성 공고(취소공고·수의계약 제외)를 찾습니다. "
+                       "공고 선택 시 그 공고의 공고일 전에 개찰된 공고만으로 유찰률을 계산합니다")
+            render_keyword_search(keyword_pool(data), inp)

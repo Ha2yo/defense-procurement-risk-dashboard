@@ -20,6 +20,7 @@ FACTORS = ["기관그룹", "사업유형", "계약·경쟁방식", "공고기간
 
 YEAR_MIN, YEAR_MAX = 2021, 2025
 DEFAULT_YEARS = (2021, 2023)  # 위험도 기준 생성기간
+AMOUNT_BASIS_YEARS = (2021, 2023)  # 금액 5분위 경계 고정 기간 (분석 기간을 바꿔도 그대로)
 
 # 변수 → 분석용 컬럼
 FACTOR_COLUMNS = {
@@ -581,6 +582,10 @@ def render():
             step=1,
             format="%d년",
         )
+    st.caption(md_safe(
+        f"기본 기간 {DEFAULT_YEARS[0]}~{DEFAULT_YEARS[1]}년 = 위험도 변수를 고른 기준 기간입니다 "
+        "(분석계획표 1~4·KPI 정의서와 같은 수치). "
+        "2021~2024년으로 넓히면 2025년 최종 평가(화면 2) 위험도의 학습 범위와 같습니다"))
     period = period_label(years)
 
 
@@ -597,7 +602,9 @@ def render():
         amount_info = None
         if factor == AMOUNT:
             try:
-                bins, names, q, basis, n_basis = amount_quintiles(period_df, base, years)
+                # 경계는 분석 기간과 상관없이 2021~2023년으로 고정 (화면 1·분석계획표 3과 같음).
+                # 기간마다 다시 나누면 같은 'Q1'이라도 금액대가 달라져 문서 수치와 연도 간 비교가 맞지 않는다
+                bins, names, q, basis, n_basis = amount_quintiles(period_df, base, AMOUNT_BASIS_YEARS)
             except ValueError as e:
                 st.error(str(e))
                 return
@@ -632,7 +639,7 @@ def render():
         notes.append(f"{EXCLUDE_REASON[factor]} {excluded:,}건 제외")
     if amount_info:
         notes.append(f"5분위 경계: {period_label((amount_info['basis'][0], amount_info['basis'][-1]))} "
-                     f"공고 {amount_info['n_basis']:,}건 기준")
+                     f"공고 {amount_info['n_basis']:,}건 기준 (분석 기간과 관계없이 고정)")
     if years[0] == YEAR_MIN:
         notes.append("2020년 공고일(pblancDate) 공고는 기간에서 제외")
     if years[1] == YEAR_MAX:
@@ -706,8 +713,11 @@ def render():
                 "- 입찰방법은 조달계획 `bidMth` 기준이며, 없을 때만 입찰결과로 복원합니다 (2025년 공고는 복원 안 함)\n"
                 "- 품목합계는 사업키별로 합산하며, 음수·결측 행이 하나라도 있거나 합계가 0이면 무효입니다\n"
                 "- 총액제에서 |예산 − 품목합계| ÷ 예산 > 10%이면 금액을 보류합니다\n"
-                f"- 5분위 경계 ({period_label((amount_info['basis'][0], amount_info['basis'][-1]))}, "
-                "2025년 제외): " + " / ".join(f"{_format_won(v)}원" for v in q)
+                f"- 5분위 경계 ({period_label((amount_info['basis'][0], amount_info['basis'][-1]))} 결과확정 경쟁성 공고 기준, "
+                "분석 기간을 바꿔도 고정): " + " / ".join(f"{_format_won(v)}원" for v in q) + "\n"
+                "- 경계를 고정하는 이유: 기간마다 다시 나누면 같은 'Q1'이라도 금액대가 달라져 연도 간 비교가 안 되고 "
+                "분석계획표 3의 2024년 비교와도 숫자가 맞지 않습니다. 화면 2 위험도의 금액 구간은 2025년 최종 평가 "
+                "학습 범위(2021~2024년) 기준이라 경계가 조금 다릅니다"
             ))
             if not amount_info["src"].empty:
                 st.caption("금액 미확인 사유: " + " · ".join(
