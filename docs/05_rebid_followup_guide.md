@@ -10,7 +10,6 @@
 - **분석 기간·관측 종료일:** 2021-01-01~2025-12-31, 원공고일 `pblancDate` 기준. 후속공고 게시일과 결과·개찰일의 관측 종료 조건을 별도로 확인한다.
 - **현행 결과 구조:** CSV **14개**(요약 6, 상세 1, 감사 7), PNG **7개**. `--debug` 사용 시 사업공고 이력 CSV가 추가될 수 있다.
 - 이전 `analysis/statistical/05_rebid_followup_analysis.py`와 `data/analysis/a5_output_csv_png/`는 **과거 작업 경로**이며, 현재 공식 GitHub 경로는 위 두 경로다.
-- **근거:** 현재 GitHub `main`에 커밋된 공식 코드와 14개 CSV, 7개 PNG의 파일명·출력 구성. 코드의 실제 입력 CLEAN을 본 대화 실행 환경에서 다시 실행한 것은 아니므로 **커밋 산출물 검증**과 **원천 데이터 재현 검증**은 구분한다.
 
 ## 2. 입력 데이터와 분석 단위
 
@@ -57,7 +56,7 @@ python scripts/analysis/05_rebid_followup_analysis.py --data-dir "C:\경로\clea
 
 추가 사업별 이력 저장이 필요할 때만 `--debug`를 사용한다. **동일한 출력 폴더에서 재실행하면 기존 CSV·PNG가 갱신될 수 있으므로**, 변경사항을 비교하려면 별도 `--output-dir`에 실행한다.
 
-## 5. 공식 모집단 감사 — 혼용 금지
+## 5. 분석 모집단
 
 출처: [`a5_audit_02_계약방식모집단.csv`](../data/analysis/rebid_followup/a5_audit_02_계약방식모집단.csv), [`a5_audit_07_검증건수요약.csv`](../data/analysis/rebid_followup/a5_audit_07_검증건수요약.csv), [`a5_summary_01_핵심요약.csv`](../data/analysis/rebid_followup/a5_summary_01_핵심요약.csv).
 
@@ -71,7 +70,7 @@ python scripts/analysis/05_rebid_followup_analysis.py --data-dir "C:\경로\clea
 
 `9,845 − 9 = 9,836`, `9,836 − 3,567 = 6,269`. 구 기준의 '유찰 9,836건'은 **수의계약 포함한 기간 내 유찰**이고, 최종 후속공고 분석 공식 연결률의 분모가 아니다.
 
-## 6. 최신 후속공고 분석 요약 및 소요일
+## 6. 후속공고 분석 결과
 
 출처: [`a5_summary_01_핵심요약.csv`](../data/analysis/rebid_followup/a5_summary_01_핵심요약.csv).
 
@@ -122,7 +121,7 @@ python scripts/analysis/05_rebid_followup_analysis.py --data-dir "C:\경로\clea
 
 두 방법의 소요일 분석 **표본이 다르므로**, 평균 차이를 기간 절감 효과 또는 인과적 영향으로 해석하지 않는다.
 
-## 8. 감사·검증 결과
+## 8. 검증 결과와 감사 자료
 
 - [`a5_audit_01_공식검증.csv`](../data/analysis/rebid_followup/a5_audit_01_공식검증.csv): 경쟁성 원공고 키 유일성, 후속 확인/미확인 합계, 재공고 부분집합 관계, 소요일 유효성 등 공식 검증 **9항목**. 현재 산출물의 검증 결과 모두 참인지 확인한다.
 - [`a5_audit_02_계약방식모집단.csv`](../data/analysis/rebid_followup/a5_audit_02_계약방식모집단.csv): 공식 모집단과 수의계약 제외 과정.
