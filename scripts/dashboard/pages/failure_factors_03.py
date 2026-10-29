@@ -15,8 +15,8 @@ from scripts.dashboard.data_loader import (
 # 1. 화면 설정
 # ============================================================
 
-AMOUNT = "사업규모금액(5분위)"
-FACTORS = ["기관그룹", "사업유형", "계약·경쟁방식", "공고기간", AMOUNT, "공고 시기"]
+AMOUNT = "사업규모금액"
+FACTORS = ["기관그룹", "사업유형", "계약방법", "공고기간", AMOUNT, "공고 시기"]
 
 YEAR_MIN, YEAR_MAX = 2021, 2025
 DEFAULT_YEARS = (2021, 2023)  # 위험도 기준 생성기간
@@ -26,7 +26,7 @@ AMOUNT_BASIS_YEARS = (2021, 2023)  # 금액 5분위 경계 고정 기간 (분석
 FACTOR_COLUMNS = {
     "기관그룹": "org_group",
     "사업유형": "busiDivs",
-    "계약·경쟁방식": "cntrctMth",
+    "계약방법": "cntrctMth",
     "공고기간": "period_bin",
     AMOUNT: "amount_bin",
     "공고 시기": "quarter",
@@ -36,7 +36,7 @@ FACTOR_COLUMNS = {
 EXCLUDE_REASON = {
     "기관그룹": "기관그룹 매핑 없음",
     "사업유형": "사업유형 결측",
-    "계약·경쟁방식": "계약방법 결측",
+    "계약방법": "계약방법 결측",
     "공고기간": "공고기간 계산 불가 또는 음수",
     AMOUNT: "사업규모금액 미확인",
     "공고 시기": "공고일 결측",
@@ -46,7 +46,7 @@ PERIOD_BINS = [-1, 5, 10, np.inf]  # 분석계획표 2와 같은 세 구간 (0�
 PERIOD_LABELS = ["5일 이하", "5일 초과~10일", "10일 초과"]
 QUARTER_LABELS = ["1분기(1~3월)", "2분기(4~6월)", "3분기(7~9월)", "4분기(10~12월)"]
 
-MIN_CATEGORY_SIZE = 30  # 계약·경쟁방식: 이보다 작은 범주는 '기타'
+MIN_CATEGORY_SIZE = 30  # 계약방법: 이보다 작은 범주는 '기타'
 ETC = "기타"
 ALPHA = 0.05
 
@@ -305,7 +305,7 @@ def factor_frame(df, factor):
     data["category"] = data["category"].astype(str)
 
     small_label, small_members = None, {}
-    if factor == "계약·경쟁방식":
+    if factor == "계약방법":
         counts = data["category"].value_counts()
         small = counts[counts < MIN_CATEGORY_SIZE]
         if len(small):
