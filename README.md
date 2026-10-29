@@ -83,7 +83,7 @@ API_KEY_DATA_PORTAL=...
 ### ④ 분석 — `scripts/analysis/` (파일명 앞 번호 = 분석 계획표 번호)
 | 분석 계획표 | 파일 (실행 순서) → 결과 |
 |---|---|
-| 사전 점검: 연도별 결과 미확인 | `00_unconfirmed_by_year.py` → `analysis/unconfirmed_by_year.csv` |
+| 사전 점검: 연도별 결과 미확인 ([가이드](docs/00_unconfirmed_by_year_guide.md)) | `00_unconfirmed_by_year.py` → `analysis/unconfirmed_by_year.csv` |
 | 1. 기관·계약방법·사업구분 | `01_bid_conditions_prepare.py` → `01_bid_conditions_analysis.py` → `analysis/results/` |
 | 2. 공고기간 | `02_bid_period_preprocess.py` → `02_bid_period_analysis.py` → `02_bid_period_year_compare.py` → `analysis/bid_period/` |
 | 3. 금액 구간 (사업규모금액 5분위) | `03_bid_amount_analysis.py` → `analysis/bid_amount/` |
