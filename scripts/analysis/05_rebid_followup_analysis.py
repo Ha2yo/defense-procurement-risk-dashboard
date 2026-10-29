@@ -8,10 +8,11 @@ A5. 유찰 이후 후속공고 및 재공고 분석
 재공고까지 관측된 추가 소요일은 어느 정도인가?
 
 [모집단]
-2021~2025년에 게시된 유찰 공고
+2021~2025년에 게시된 결과확정 유찰 공고 중 수의계약을 제외한 경쟁성 공고
 
 [핵심 기준]
-- 원공고: noticeKey
+- 원공고: noticeKey (수의계약 제외; 계약방법 문자열에 "수의" 포함 시 제외)
+- 후속 후보: 계약방식 변경 가능성을 관측하기 위해 수의계약 여부와 관계없이 검색
 - 동일 사업: businessKey
 - 후속공고: 동일 사업 내 개찰시각이 엄격히 늦은 유효 공고
 - 시간 검증: 후속 후보 게시일 >= 원공고 개찰일(날짜 단위)
@@ -34,7 +35,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+import matplotlib.ticker as mticker
 
 
 # ============================================================
@@ -43,7 +44,7 @@ import seaborn as sns
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data" / "clean"
-OUTPUT_DIR = PROJECT_ROOT / "data" / "analysis" / "a5_output_project"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "analysis" / "a5_output_csv_png"
 BASELINE_DIR = PROJECT_ROOT / "data" / "analysis" / "a5_output_before_fix"
 
 START_DATE = pd.Timestamp("2021-01-01")
@@ -55,7 +56,7 @@ SENSITIVITY_DAYS = 90
 EXCLUDED_FOLLOWUP_TYPES = {"취소공고"}
 CONFIRMED_RESULTS = {"유찰", "낙찰", "순위확정"}
 
-REFERENCE = {
+LEGACY_REFERENCE = {
     "공고 전체": 61142,
     "공고키 직접매칭": 38025,
     "결과 미확인": 13769,
@@ -159,7 +160,7 @@ def prepare(notices, results):
     assert_columns(
         notices,
         ["businessKey", "noticeKey", "pblancDate",
-         "opengDt", "pblancSe", "pblancOdr"],
+         "opengDt", "pblancSe", "pblancOdr", "cntrctMth"],
         "입찰공고",
     )
     assert_columns(
@@ -181,6 +182,9 @@ def prepare(notices, results):
     n["notice_date"] = parse_datetime(n["pblancDate"])
     n["opening_at"] = parse_datetime(n["opengDt"])
     n["notice_round"] = pd.to_numeric(n["pblancOdr"], errors="coerce")
+    # 다른 절과 동일한 제외 대상: 수의계약(변형 표기 포함). 결측은 별도 감사 대상으로 남김.
+    n["is_private_contract"] = n["cntrctMth"].fillna("").astype("string").str.strip().str.contains("수의", regex=False)
+    n["is_private_contract"] = n["is_private_contract"].fillna(False).astype(bool)
 
     r["bidResult"] = clean_text(r["bidResult"])
     r = r.dropna(subset=["noticeKey"])
@@ -242,10 +246,12 @@ def build_followup(n):
     - 관측 종료일 이후 개찰 후보는 결과·소요일에서 제외한다.
     """
 
-    # 원공고는 2021~2025년 게시 유찰 공고
+    # 공식 A5 모집단: 기간 내 경쟁성 유찰 원공고만 사용.
+    # 후속 후보는 수의계약으로 전환된 사례도 놓치지 않도록 기존 범위를 유지.
     subjects = n.loc[
         n.notice_date.between(START_DATE, END_DATE)
         & n.result_status.eq("유찰")
+        & ~n.is_private_contract
     ].copy()
 
     subjects = subjects.sort_values(
@@ -606,50 +612,124 @@ def summarize(df, label):
 # ============================================================
 
 def make_validation(n, detail, summary):
-    """기존 프로젝트 문서 참고값과 실제 실행값의 차이를 기록한다."""
+    """공식 모집단 정합성을 독립 검사하고, 구 기준값은 감사 참고행으로만 저장."""
+    in_period = n.notice_date.between(START_DATE, END_DATE)
+    original = n.loc[in_period & n.result_status.eq("유찰")]
+    competitive = original.loc[~original.is_private_contract]
+    checks = [
+        ("공식", "유찰 원공고 정확한 모집단", set(detail.noticeKey) == set(competitive.noticeKey)),
+        ("공식", "유찰 원공고 키 유일성", detail.noticeKey.notna().all() and detail.noticeKey.is_unique),
+        ("공식", "유찰 원공고 수의계약 제외", not detail.is_private_contract.any()),
+        ("공식", "수의계약 제외 건수 보존", len(original) == len(competitive) + int(original.is_private_contract.sum())),
+        ("공식", "후속공고 확인/미확인 합계", int(detail.followup_found.sum()) + int((~detail.followup_found).sum()) == len(detail)),
+        ("공식", "재공고는 후속공고 부분집합", not (detail.followup_reannounce & ~detail.followup_found).any()),
+        ("공식", "공식 소요일은 결과확정 재공고 부분집합", not (detail.duration_valid & ~detail.followup_reannounce_result_known).any()),
+        ("공식", "공식 소요일은 0일 이상", not detail.loc[detail.duration_valid, "delay_days"].lt(0).any()),
+        ("공식", "관측 종료일 이후 개찰은 공식 소요일 제외", not (detail.duration_valid & detail.next_opening_after_cutoff).any()),
+    ]
+    rows = [{"검증구분": kind, "검증항목": name, "검증결과": bool(passed), "기준값": "동적 일관성", "실행값": "", "차이": "", "비고": "공식 검증"} for kind,name,passed in checks]
     actual = {
         "공고 전체": len(n),
-        "공고키 직접매칭": int(
-            n.connection_status.eq("결과 직접매칭").sum()
-        ),
-        "결과 미확인": int(
-            n.connection_status.eq("결과 미확인").sum()
-        ),
-        "취소공고": int(
-            n.connection_status.eq("취소공고").sum()
-        ),
-        "동일사업 다른 공고 결과 존재": int(
-            n.connection_status.eq("동일사업 다른 공고 결과 존재").sum()
-        ),
+        "공고키 직접매칭": int(n.connection_status.eq("결과 직접매칭").sum()),
+        "결과 미확인": int(n.connection_status.eq("결과 미확인").sum()),
+        "취소공고": int(n.connection_status.eq("취소공고").sum()),
+        "동일사업 다른 공고 결과 존재": int(n.connection_status.eq("동일사업 다른 공고 결과 존재").sum()),
         "유찰 공고": len(detail),
         "후속공고 확인": int(detail.followup_found.sum()),
         "후속공고 미확인": int((~detail.followup_found).sum()),
         "후속 재공고 확인": int(detail.followup_reannounce.sum()),
         "후속공고 결과확정": int(detail.followup_result_known.sum()),
-        "후속공고 결과미확인": int(
-            (detail.followup_found & ~detail.followup_result_known).sum()
-        ),
-        "후속 재공고 결과확정": int(
-            detail.followup_reannounce_result_known.sum()
-        ),
-        "2025년 4분기 제외 결과확정 후속 재공고": int(
-            (
-                detail.last_quarter_excluded
-                & detail.followup_reannounce_result_known
-            ).sum()
-        ),
+        "후속공고 결과미확인": int((detail.followup_found & ~detail.followup_result_known).sum()),
+        "후속 재공고 결과확정": int(detail.followup_reannounce_result_known.sum()),
+        "2025년 4분기 제외 결과확정 후속 재공고": int((detail.last_quarter_excluded & detail.followup_reannounce_result_known).sum()),
     }
+    # 과거 수치는 별도 참고행: 기간 외 제외와 수의계약 제외를 하나의 오차로 합치지 않는다.
+    # '유찰 공고'의 과거 9,845건과 공식 6,269건 차이는 두 단계로 해석해야 한다.
+    all_failed_global = n.loc[n.result_status.eq("유찰")]
+    in_period_failed = original
+    period_excluded = all_failed_global.loc[~all_failed_global.notice_date.between(START_DATE, END_DATE)]
+    for name, old in LEGACY_REFERENCE.items():
+        note = "과거 수의계약 포함 참고값; 공식 오류 판정에서 제외"
+        if name == "유찰 공고":
+            note = (f"서로 다른 모집단: 전체기간 {len(all_failed_global):,}건 → 기간 내 {len(in_period_failed):,}건 "
+                    f"(기간 외 {len(period_excluded):,}건 제외) → 경쟁성 {len(competitive):,}건 "
+                    f"(수의계약 {int(in_period_failed.is_private_contract.sum()):,}건 제외). "
+                    "과거값과 직접 비교한 차이는 오류가 아님")
+        rows.append({"검증구분":"과거 수의계약 포함 참고", "검증항목":name,
+                     "검증결과":pd.NA, "기준값":old, "실행값":actual[name],
+                     "차이":actual[name]-old, "비고":note})
+    if not all(bool(value) for _, _, value in checks):
+        failed = [name for _, name, passed in checks if not passed]
+        raise RuntimeError(f"공식 A5 정합성 검증 실패: {failed}")
+    return pd.DataFrame(rows)
 
-    return pd.DataFrame([
-        {
-            "검증 항목": key,
-            "문서 기준": expected,
-            "실행값": actual[key],
-            "차이": actual[key] - expected,
-            "일치": actual[key] == expected,
-        }
-        for key, expected in REFERENCE.items()
+
+def build_conservative_sensitivity(detail, history):
+    """원공고 분모 유지. 같은 날 게시된 연결만 배제하고 다음 유효 후보를 재탐색.
+
+    기존 공식 후속공고를 변경하지 않고 독립적인 비교 결과를 산출한다.
+    게시일이 원공고 개찰일보다 엄격히 늦고 후보 개찰시각도 늦어야 한다.
+    """
+    alternative = detail[["noticeKey", "businessKey", "opening_at", "same_day_order_review"]].copy()
+    alternative["conservative_next_noticeKey"] = pd.NA
+    alternative["conservative_next_pblancSe"] = pd.NA
+    alternative["conservative_next_result_status"] = pd.NA
+    alternative["conservative_next_opening_at"] = pd.NaT
+
+    # 기존 후속공고가 없거나 날짜가 명백히 늦으면 기존 판정을 그대로 이용.
+    safe = detail.followup_found & ~detail.same_day_order_review
+    for source, target in [("next_noticeKey", "conservative_next_noticeKey"),
+                           ("next_pblancSe", "conservative_next_pblancSe"),
+                           ("next_result_status", "conservative_next_result_status"),
+                           ("next_opening_at", "conservative_next_opening_at")]:
+        alternative.loc[safe, target] = detail.loc[safe, source].to_numpy()
+
+    # 같은 날짜 후보가 선정된 원공고에 대해서만 더 나중에 게시된 후보 검색.
+    # history는 개찰시각 기준으로 정렬되어 있으므로 최초 후보는 개찰시각 최소.
+    ambiguous = detail.loc[detail.same_day_order_review]
+    history_groups = {key: group for key, group in history.groupby("businessKey", sort=False)}
+    for idx, source in ambiguous.iterrows():
+        group = history_groups.get(source.businessKey)
+        if group is None or pd.isna(source.opening_at):
+            continue
+        candidates = group.loc[
+            group.noticeKey.ne(source.noticeKey).fillna(False)
+            & group.opening_at.gt(source.opening_at)
+            & group.notice_date.gt(source.opening_at.normalize())
+        ].sort_values(["opening_at", "notice_date", "notice_round", "noticeKey"], kind="stable")
+        if candidates.empty:
+            continue
+        candidate = candidates.iloc[0]
+        for source_col, target_col in [("noticeKey", "conservative_next_noticeKey"),
+                                      ("pblancSe", "conservative_next_pblancSe"),
+                                      ("result_status", "conservative_next_result_status"),
+                                      ("opening_at", "conservative_next_opening_at")]:
+            alternative.at[idx, target_col] = candidate[source_col]
+
+    alternative["conservative_followup_found"] = alternative.conservative_next_noticeKey.notna()
+    alternative["conservative_reannounce"] = alternative.conservative_followup_found & alternative.conservative_next_pblancSe.eq("재공고").fillna(False)
+    opening = pd.to_datetime(alternative.conservative_next_opening_at, errors="coerce")
+    observable = opening.notna() & opening.dt.normalize().le(OBSERVATION_END)
+    alternative["conservative_result_known"] = alternative.conservative_followup_found & observable & alternative.conservative_next_result_status.isin(CONFIRMED_RESULTS)
+    alternative["conservative_delay_days"] = (opening.dt.normalize() - alternative.opening_at.dt.normalize()).dt.days.where(observable)
+    alternative["conservative_duration_valid"] = (alternative.conservative_reannounce & alternative.conservative_result_known & alternative.conservative_delay_days.ge(0).fillna(False))
+    original = int(detail.followup_found.sum())
+    conservative = int(alternative.conservative_followup_found.sum())
+    if conservative > original:
+        raise RuntimeError("보수적 연결 수가 기존 공식 연결보다 많습니다.")
+    n = len(detail)
+    duration = alternative.loc[alternative.conservative_duration_valid, "conservative_delay_days"]
+    review = pd.DataFrame([
+        {"분석구분":"기존 공식 (동일 날짜 후보 허용)", "추적원공고":n, "후속공고확인":original,
+         "연결률_pct":100*original/n if n else np.nan,
+         "공식소요일표본":int(detail.duration_valid.sum()),
+         "공식평균소요일":float(detail.loc[detail.duration_valid,"delay_days"].mean())},
+        {"분석구분":"보수적 (개찰일 다음날 이후 게시만 허용)", "추적원공고":n, "후속공고확인":conservative,
+         "연결률_pct":100*conservative/n if n else np.nan,
+         "공식소요일표본":int(alternative.conservative_duration_valid.sum()),
+         "공식평균소요일":float(duration.mean())},
     ])
+    return alternative, review
 
 
 # ============================================================
@@ -819,445 +899,308 @@ def compare_with_baseline(detail, output_dir):
         )
 
 
+
 # ============================================================
-# 8. PNG 시각화
+# 8. 출력 패키지: 요약 CSV · 공고 CSV · 감사 CSV · 개별 PNG (단일 폴더)
 # ============================================================
 
-def create_a5_plots(detail, output_dir):
+def save_csv_tables(folder: Path, tables: dict[str, pd.DataFrame], prefix: str) -> list[Path]:
+    """기존 Excel 시트별 DataFrame을 UTF-8 BOM CSV로 저장한다.
+
+    일부 감사 데이터가 0행이어도 컬럼 헤더를 유지하여 검증 이력을 보존한다.
     """
-    A5 보고서용 시각화 4개를 생성한다.
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for number, (name, table) in enumerate(tables.items(), 1):
+        path = folder / f"{prefix}_{number:02d}_{name}.csv"
+        table.to_csv(path, index=False, encoding="utf-8-sig")
+        print(f"[CSV] {path.name}: {len(table):,}행")
+        paths.append(path)
+    return paths
 
-    1. 후속공고 확인/미확인
-    2. 후속공고 → 재공고 → 결과확정 현황
-    3. 공식 추가 소요일 히스토그램
-    4. 마지막 분기 제외 소요일 상자그림
-    """
-    system = platform.system()
 
-    if system == "Darwin":
-        font = "AppleGothic"
-    elif system == "Windows":
-        font = "Malgun Gothic"
-    else:
-        font = "DejaVu Sans"
+class PNGPages:
+    """시각화 7종을 단일 출력 폴더에 PNG로 저장하는 어댑터."""
+    TITLES = [
+        '01_followup_stages', '02_link_rate_sensitivity',
+        '03_duration_sensitivity', '04_duration_histogram',
+        '05_duration_ecdf', '06_by_business_type',
+        '07_observation_90day',
+    ]
 
-    plt.rcParams["font.family"] = font
-    plt.rcParams["axes.unicode_minus"] = False
-    sns.set_theme(style="whitegrid", font=font)
+    def __init__(self, folder: Path):
+        self.folder = Path(folder)
+        self.index = 0
+        self.folder.mkdir(parents=True, exist_ok=True)
 
-    # --------------------------------------------------------
-    # 8-1. 후속공고 확인 현황
-    # --------------------------------------------------------
-    total = len(detail)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def savefig(self, figure, **kwargs):
+        if self.index >= len(self.TITLES):
+            raise RuntimeError('기대 그래프 7개를 초과했습니다.')
+        destination = self.folder / f'{self.TITLES[self.index]}.png'
+        figure.savefig(destination, dpi=200, facecolor='white', **kwargs)
+        print(f'[PNG] {destination.name}')
+        self.index += 1
+
+
+def _chart_font():
+    # macOS / Windows / Linux 한글 폰트 검색. 그래프 글자 깨짐 방지.
+    from matplotlib import font_manager
+    installed = {f.name for f in font_manager.fontManager.ttflist}
+    for family in ('NanumGothic', 'AppleGothic', 'Malgun Gothic', 'NanumSquare', 'UnDotum', 'DejaVu Sans'):
+        if family in installed:
+            plt.rcParams['font.family'] = family
+            break
+    plt.rcParams['axes.unicode_minus'] = False
+    plt.rcParams['pdf.fonttype'] = 42
+
+
+def _pdf_page(pdf, title, desc, draw):
+    fig, ax = plt.subplots(figsize=(11.7, 7.8))
+    fig.subplots_adjust(left=.13, right=.96, bottom=.19, top=.81)
+    fig.suptitle(title, fontsize=18, weight='bold', y=.95)
+    draw(ax)
+    fig.text(.08, .07, desc, fontsize=9, color='#444444', wrap=True)
+    pdf.savefig(fig, bbox_inches='tight')
+    plt.close(fig)
+
+
+def create_report_pngs(path, detail, summary, conservative_summary, metrics_90d, subgroup):
+    """해석 및 분모를 포함한 시각화 7개를 개별 PNG로 저장."""
+    _chart_font()
+    n = len(detail)
     found = int(detail.followup_found.sum())
-    missing = total - found
+    reann = int(detail.followup_reannounce.sum())
+    known = int(detail.followup_reannounce_result_known.sum())
+    durations = pd.to_numeric(detail.loc[detail.duration_valid, 'delay_days'], errors='coerce').dropna()
 
-    labels = ["후속공고 확인", "후속공고 미확인"]
-    values = [found, missing]
+    with PNGPages(path) as pdf:
+        def draw_flow(ax):
+            names = ['경쟁성 유찰', '후속공고 확인', '후속 재공고', '결과확정 재공고']
+            vals = [n, found, reann, known]
+            y = np.arange(len(vals))
+            ax.barh(y, vals, color=['#24476B','#3877A3','#3C9280','#71A98E'])
+            ax.set_yticks(y, names)
+            ax.invert_yaxis()
+            ax.set_xlim(0, n*1.16)
+            ax.set_xlabel('공고 수 (건)')
+            for i, v in enumerate(vals):
+                ax.text(v+max(1,n*.012), i, f'{v:,}건  ({v/n:.1%}, 최초 분모)', va='center')
+            ax.grid(axis='x', alpha=.18)
+        _pdf_page(pdf, 'A5 | 경쟁성 유찰 이후 후속공고 단계',
+                  f'모든 비율은 최초 경쟁성 유찰 원공고 {n:,}건을 기준. 단계 간 부분집합 관계를 나타내며 각각 독립 모집단이 아님.', draw_flow)
 
-    fig, ax = plt.subplots(figsize=(9, 6))
-    bars = ax.bar(
-        labels,
-        values,
-        color=["#4C78A8", "#BDBDBD"],
-        width=0.55,
-    )
+        def draw_connect(ax):
+            a = conservative_summary.copy()
+            names = ['공식: 동일일 후보 허용', '보수적: 다음날 게시']
+            vals = pd.to_numeric(a['연결률_pct'],errors='coerce').to_numpy()
+            ax.bar(names, vals, color=['#326C98','#E4A24A'], width=.50)
+            ax.set_ylabel('후속공고 연결률 (%)')
+            ax.set_ylim(0, max(vals)*1.32)
+            for i, v in enumerate(vals):
+                ax.text(i, v+.5, f'{v:.2f}%\n({int(a.iloc[i]["후속공고확인"]):,}/{n:,})', ha='center')
+            ax.grid(axis='y',alpha=.17)
+        _pdf_page(pdf,'A5 | 공식·보수적 연결률 비교',
+                  f'공식값은 게시일=개찰일 후보를 허용해 시간 순서가 불확실할 수 있음. 보수적 기준은 개찰일 다음 날 이후 게시 후보만 인정·재탐색. 두 방식 모두 경쟁성 원공고 {n:,}건이 분모. 보수적 수치는 공식 KPI의 민감도 비교용.',draw_connect)
 
-    for bar, value in zip(bars, values):
-        pct = value / total * 100 if total else 0
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            value,
-            f"{value:,}건\n({pct:.1f}%)",
-            ha="center",
-            va="bottom",
-        )
+        def draw_mean(ax):
+            a=conservative_summary
+            vals=pd.to_numeric(a['공식평균소요일'], errors='coerce').to_numpy()
+            ax.bar(['공식 연결', '보수적 연결'], vals, width=.52, color=['#326C98','#E4A24A'])
+            ax.set_ylim(0, max(vals)*1.4)
+            ax.set_ylabel('결과확정 후속 재공고 평균 추가 소요일 (일)')
+            for i,v in enumerate(vals):
+                ax.text(i, v+.3, f'{v:.2f}일  (n={int(a.iloc[i]["공식소요일표본"]):,})',ha='center')
+            ax.grid(axis='y',alpha=.17)
+        _pdf_page(pdf,'A5 | 추가 소요일: 공식·보수적 비교',
+                  '공고별 개찰일 차이이며 예상 절감일수가 아님. 비교 집단이 다르므로 평균 변화는 인과 효과가 아님.',draw_mean)
 
-    ax.set_title("A5. 후속공고 확인 현황", fontsize=15)
-    ax.set_ylabel("공고 수(건)")
-    ax.set_ylim(0, max(values) * 1.2 if max(values) else 1)
+        def draw_hist(ax):
+            if durations.empty: return
+            bins=np.arange(durations.min()-.5,durations.max()+1.5,2)
+            ax.hist(durations, bins=bins, color='#4C78A8',edgecolor='white',alpha=.88)
+            ax.axvline(durations.mean(),color='#D44E42',ls='--',lw=2,label=f'평균 {durations.mean():.2f}일')
+            ax.axvline(durations.median(),color='#2A8B71',ls='--',lw=2,label=f'중앙값 {durations.median():.0f}일')
+            ax.set_xlabel('개찰일 기준 추가 소요일 (일)')
+            ax.set_ylabel('공고 수 (건)')
+            ax.legend()
+            ax.grid(axis='y',alpha=.18)
+        _pdf_page(pdf,'A5 | 결과확정 후속 재공고 소요일 분포',
+                  f'공식 소요일 표본 n={len(durations):,}건. 평균·중앙값을 동시에 표시하여 긴 꼬리와 이상값의 영향 구분.',draw_hist)
 
-    fig.tight_layout()
-    fig.savefig(
-        output_dir / "a5_followup_status.png",
-        dpi=300, bbox_inches="tight",
-    )
-    plt.close(fig)
+        def draw_ecdf(ax):
+            if durations.empty: return
+            values=np.sort(durations.to_numpy(float))
+            ax.step(values,np.arange(1,len(values)+1)/len(values)*100,where='post',color='#326C98',lw=2)
+            for cutoff in [7,14,30,60]:
+                pct=(values<=cutoff).mean()*100
+                ax.axvline(cutoff,ls=':',color='#777',alpha=.55)
+                ax.text(cutoff+1,min(98,pct+2),f'{cutoff}일 {pct:.1f}%',fontsize=9)
+            ax.set_xlim(left=0)
+            ax.set_ylim(0,103)
+            ax.set_ylabel('누적 비율 (%)')
+            ax.set_xlabel('추가 소요일 (일 이하)')
+            ax.grid(alpha=.17)
+        _pdf_page(pdf,'A5 | 공식 소요일 누적분포 (ECDF)',
+                  f'결과확정 후속 재공고 {len(durations):,}건의 누적 소요일. 7·14·30·60일 이내 관측 비율을 보여줌.',draw_ecdf)
 
-    # --------------------------------------------------------
-    # 8-2. 후속 재공고 및 결과확정 현황
-    # --------------------------------------------------------
-    labels = [
-        "후속공고 확인",
-        "후속 재공고 확인",
-        "결과확정\n후속 재공고",
-    ]
-    values = [
-        int(detail.followup_found.sum()),
-        int(detail.followup_reannounce.sum()),
-        int(detail.followup_reannounce_result_known.sum()),
-    ]
+        def draw_div(ax):
+            groups=subgroup['사업구분'].copy()
+            if groups.empty: return
+            groups=groups.sort_values('추적 대상 건수',ascending=False).head(8)
+            names=groups['구간'].astype(str).str.replace('busiDivs=', '',regex=False).tolist()
+            vals=pd.to_numeric(groups['후속공고 확인 비율(%)'],errors='coerce').fillna(0).to_numpy()
+            ys=np.arange(len(vals))
+            ax.barh(ys,vals,color='#326C98')
+            ax.set_yticks(ys,names)
+            ax.invert_yaxis()
+            ax.set_xlim(0,max(5,vals.max()*1.3))
+            for i,v in enumerate(vals):
+                ax.text(v+.3,i,f'{v:.1f}% (n={int(groups.iloc[i]["추적 대상 건수"]):,})',va='center')
+            ax.set_xlabel('후속공고 연결률 (%)')
+        _pdf_page(pdf,'A5 | 사업구분별 연결률',
+                  '기술통계 비교이며 원인 또는 인과효과로 해석하지 않음. 각 범주별 원공고 수 표시.',draw_div)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    bars = ax.bar(
-        labels,
-        values,
-        color=["#4C78A8", "#F58518", "#54A24B"],
-        width=0.6,
-    )
+        def draw_observation(ax):
+            rows=metrics_90d.copy()
+            labels=rows['지표'].astype(str).tolist()
+            values=pd.to_numeric(rows['연결률(%)'],errors='coerce').to_numpy()
+            ys=np.arange(len(values))
+            ax.barh(ys,values,color='#6B91B8')
+            ax.set_yticks(ys,labels)
+            ax.invert_yaxis()
+            ax.set_xlim(0,max(5,np.nanmax(values)*1.33))
+            for i,v in enumerate(values):
+                ax.text(v+.3,i,f'{v:.2f}% (n={int(rows.iloc[i]["분모"]):,})',va='center')
+            ax.set_xlabel('연결률 (%)')
+        _pdf_page(pdf,'A5 | 관측기간과 90일 민감도',
+                  '완전 관측 가능 집단 연결률과 그중 90일 이내 연결률은 정의가 다름. 미확인을 미재공고로 확정하지 않음.',draw_observation)
+    print('[PNG] 개별 시각화 7개:',path)
 
-    for bar, value in zip(bars, values):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            value,
-            f"{value:,}건",
-            ha="center",
-            va="bottom",
-        )
 
-    ax.set_title("A5. 후속공고·재공고 확인 단계", fontsize=15)
-    ax.set_ylabel("공고 수(건)")
-    ax.set_ylim(0, max(values) * 1.2 if max(values) else 1)
+def build_integrated_outputs(detail, history, summary, validation, conservative_detail,
+                             conservative_summary, metrics_90d, cohort_audit,
+                             temporal_review, same_time_review, cutoff_review,
+                             out_of_period, output_dir, debug_history=False):
+    """분석 과정의 DataFrame은 유지하고 CSV와 PNG를 한 출력 폴더에 저장."""
+    # 공식/보수적 모두 원공고 noticeKey 1:1 일치하여야 한다.
+    if len(detail)!=len(conservative_detail) or detail.noticeKey.duplicated().any():
+        raise RuntimeError('원공고/보수적 산출물 1:1 관계 위반')
+    if set(detail.noticeKey)!=set(conservative_detail.noticeKey):
+        raise RuntimeError('공식/보수적 공고키 불일치')
+    reduced=conservative_detail.drop(columns=['businessKey','opening_at','same_day_order_review'],errors='ignore')
+    combined=detail.merge(reduced,on='noticeKey',how='left',validate='one_to_one')
+    if len(combined)!=len(detail):
+        raise RuntimeError('통합 상세 행수 보존 오류')
+    if not combined.noticeKey.is_unique:
+        raise RuntimeError('통합 상세 공고키 중복 발생')
 
-    fig.tight_layout()
-    fig.savefig(
-        output_dir / "a5_reannounce_status.png",
-        dpi=300, bbox_inches="tight",
-    )
-    plt.close(fig)
+    subgroup={}
+    for name,col in [('사업구분','busiDivs'),('계약방법','cntrctMth'),('기관별','orntCode')]:
+        rows=[summarize(g,f'{col}={key}') for key,g in detail.groupby(col,dropna=False)]
+        subgroup[name]=pd.DataFrame(rows)
 
-    # --------------------------------------------------------
-    # 8-3. 결과확정 후속 재공고 소요일 분포
-    # --------------------------------------------------------
-    days = pd.to_numeric(
-        detail.loc[detail.duration_valid, "delay_days"],
-        errors="coerce",
-    ).dropna()
-
-    if not days.empty:
-        fig, ax = plt.subplots(figsize=(11, 6))
-
-        sns.histplot(
-            days,
-            bins=30,
-            color="#4C78A8",
-            edgecolor="white",
-            ax=ax,
-        )
-
-        mean_days = days.mean()
-        median_days = days.median()
-
-        ax.axvline(
-            mean_days,
-            color="#D62728",
-            linestyle="--",
-            linewidth=2,
-            label=f"평균 {mean_days:.1f}일",
-        )
-        ax.axvline(
-            median_days,
-            color="#2CA02C",
-            linestyle="--",
-            linewidth=2,
-            label=f"중앙값 {median_days:.1f}일",
-        )
-
-        ax.set_title(
-            "A5. 결과확정 후속 재공고 추가 소요일 분포",
-            fontsize=15,
-        )
-        ax.set_xlabel("추가 소요일(일)")
-        ax.set_ylabel("공고 수(건)")
-        ax.legend()
-
-        fig.tight_layout()
-        fig.savefig(
-            output_dir / "a5_duration_distribution.png",
-            dpi=300, bbox_inches="tight",
-        )
-        plt.close(fig)
-
-    # --------------------------------------------------------
-    # 8-4. 마지막 분기 제외 소요일 비교
-    # --------------------------------------------------------
-    full = pd.to_numeric(
-        detail.loc[detail.duration_valid, "delay_days"],
-        errors="coerce",
-    ).dropna()
-
-    excluded = pd.to_numeric(
-        detail.loc[
-            detail.duration_valid & detail.last_quarter_excluded,
-            "delay_days",
-        ],
-        errors="coerce",
-    ).dropna()
-
-    if not full.empty and not excluded.empty:
-        plot_df = pd.DataFrame({
-            "구간": (
-                ["전체"] * len(full)
-                + ["2025년 4분기 제외"] * len(excluded)
-            ),
-            "추가 소요일": pd.concat(
-                [full, excluded], ignore_index=True
-            ),
-        })
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        sns.boxplot(
-            data=plot_df,
-            x="구간",
-            y="추가 소요일",
-            color="#76A5D4",
-            showfliers=True,
-            ax=ax,
-        )
-
-        ax.set_title(
-            "A5. 마지막 분기 제외 전후 추가 소요일 비교",
-            fontsize=15,
-        )
-        ax.set_xlabel("")
-        ax.set_ylabel("추가 소요일(일)")
-
-        fig.tight_layout()
-        fig.savefig(
-            output_dir / "a5_duration_boxplot.png",
-            dpi=300, bbox_inches="tight",
-        )
-        plt.close(fig)
-
-    print("[시각화] A5 PNG 생성 완료")
+    # 중요: 감사 파일에는 후보 단계 원시 근거를 시트로 보존.
+    summary_tabs={
+        '핵심요약':summary,
+        '보수적민감도':conservative_summary,
+        '90일관측':metrics_90d,
+        '사업구분':subgroup['사업구분'],
+        '계약방법':subgroup['계약방법'],
+        '기관별':subgroup['기관별'],
+    }
+    audit_tabs={
+        '공식검증':validation,
+        '계약방식모집단':cohort_audit,
+        '시간순서후보':temporal_review,
+        '동일개찰시각후보':same_time_review,
+        '관측종료후보':cutoff_review,
+        '기간외유찰':out_of_period[['noticeKey','pblancDate','cntrctMth','result_status']].copy() if len(out_of_period) else pd.DataFrame(),
+        '검증건수요약':pd.DataFrame([{'항목':k,'건수':v} for k,v in {
+            '공식원공고':len(detail),'공식연결':int(detail.followup_found.sum()),
+            '미연결':int((~detail.followup_found).sum()),'공식소요일':int(detail.duration_valid.sum()),
+            '동일게시일검토':int(detail.same_day_order_review.sum()),
+            '동일개찰시각원공고':int(detail.same_time_next.sum()),
+            '시간역전원공고':int(detail.temporal_order_review.sum()),
+            '보수적연결':int(conservative_detail.conservative_followup_found.sum()),
+            '기간내 유찰(수의계약 포함)':int((detail.shape[0] + cohort_audit.loc[cohort_audit['항목'].eq('[4] 분석기간 내 수의계약 유찰 제외'),'건수'].iloc[0])),
+        }.items()])
+    }
+    # 모든 CSV와 PNG를 하나의 폴더에 평면 저장한다. 분석 중간 DataFrame은 그대로 보존한다.
+    # 아웃풋 중 어느 하나라도 실패하면 성공 메시지 출력 금지.
+    save_csv_tables(output_dir, summary_tabs, 'a5_summary')
+    combined.to_csv(output_dir/'a5_followup_detail.csv',index=False,encoding='utf-8-sig')
+    print(f'[CSV] a5_followup_detail.csv: {len(combined):,}행')
+    save_csv_tables(output_dir, audit_tabs, 'a5_audit')
+    create_report_pngs(output_dir,detail,summary,conservative_summary,metrics_90d,subgroup)
+    if debug_history:
+        history.to_csv(output_dir/'a5_business_history.csv',index=False,encoding='utf-8-sig')
+    print('[완료] 단일 폴더 저장: CSV 14개(요약 6 + 상세 1 + 감사 7), PNG 7개. 디버그 이력:',bool(debug_history))
+    return combined
 
 
 # ============================================================
-# 9. 메인 분석
+# 9. 전체 A5 실행
 # ============================================================
-
 def main():
-    """입력부터 통계·검증·PNG 생성까지 전체 파이프라인 실행."""
-
-    parser = argparse.ArgumentParser(
-        description="A5 후속공고·재공고·추가 소요일 분석"
-    )
-    parser.add_argument(
-        "--data-dir",
-        type=Path,
-        default=DEFAULT_DATA_DIR,
-        help="CLEAN CSV 디렉터리",
-    )
-
-    args = parser.parse_args()
-
-    data_dir = args.data_dir
-    output_dir = OUTPUT_DIR
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print("=" * 65)
-    print("A5 후속공고 및 재공고 분석 시작")
-    print("=" * 65)
-    print(f"입력 폴더: {data_dir}")
-    print(f"출력 폴더: {output_dir}")
-    print(f"관측 종료일: {OBSERVATION_END.date()}")
-
-    # --------------------------------------------------------
-    # 9-1. 입력 데이터
-    # --------------------------------------------------------
-    notices = load_one(data_dir, "bid_notice_clean_")
-    results = load_one(data_dir, "bid_result_clean_")
-
-    n, _ = prepare(notices, results)
-
-    (
-        detail,
-        history,
-        temporal_review,
-        same_time_review,
-        cutoff_review,
-    ) = build_followup(n)
-
-    # 원공고 게시일이 분석기간 밖인 유찰공고
-    out_of_period = n.loc[
-        n.result_status.eq("유찰")
-        & ~n.notice_date.between(START_DATE, END_DATE)
-    ].copy()
-
-    # --------------------------------------------------------
-    # 9-2. 요약 및 민감도 분석
-    # --------------------------------------------------------
-    summary = pd.DataFrame([
-        summarize(detail, "2021~2025 전체"),
-        summarize(
-            detail.loc[detail.last_quarter_excluded],
-            "2025년 4분기 제외",
-        ),
-        summarize(
-            detail.loc[detail.complete_90d_observation],
-            "90일 완전 관측 가능",
-        ),
+    parser=argparse.ArgumentParser(description='A5 경쟁성 유찰 후속공고 분석: CSV 및 개별 PNG 저장')
+    parser.add_argument('--data-dir',type=Path,default=DEFAULT_DATA_DIR)
+    parser.add_argument('--output-dir',type=Path,default=OUTPUT_DIR)
+    parser.add_argument('--debug',action='store_true',help='원시 사업공고 이력 CSV 추가 생성')
+    args=parser.parse_args()
+    out=args.output_dir
+    out.mkdir(parents=True,exist_ok=True)
+    notices=load_one(args.data_dir,'bid_notice_clean_')
+    results=load_one(args.data_dir,'bid_result_clean_')
+    n,_=prepare(notices,results)
+    detail,history,temporal_review,same_time_review,cutoff_review=build_followup(n)
+    out_of_period=n.loc[n.result_status.eq('유찰') & ~n.notice_date.between(START_DATE,END_DATE)].copy()
+    summary=pd.DataFrame([
+        summarize(detail,'2021~2025 전체'),
+        summarize(detail.loc[detail.last_quarter_excluded],'2025년 4분기 제외'),
+        summarize(detail.loc[detail.complete_90d_observation],'90일 완전 관측 가능')
     ])
+    validation=make_validation(n,detail,summary)
+    conservative_detail,conservative_summary=build_conservative_sensitivity(detail,history)
+    metrics_90d=make_90day_metrics(detail)
+    within=n.notice_date.between(START_DATE,END_DATE)
+    all_failed=n.loc[within & n.result_status.eq('유찰')]
+    private_all=n.loc[within & n.is_private_contract]
+    private_failed=all_failed.loc[all_failed.is_private_contract]
+    all_failed_global = n.loc[n.result_status.eq('유찰')]
+    out_of_period_failed = all_failed_global.loc[~within]
+    if len(all_failed_global) != len(out_of_period_failed) + len(all_failed):
+        raise RuntimeError('A5 감사: 기간 외 유찰 + 기간 내 유찰 합계 불일치')
+    if len(all_failed) != len(private_failed) + len(detail):
+        raise RuntimeError('A5 감사: 수의계약 제외 모집단 합계 불일치')
+    cohort_audit=pd.DataFrame([
+        {'항목':'[1] 전체 기간 결과확정 유찰 공고','건수':len(all_failed_global)},
+        {'항목':'[2] 분석기간 외 유찰 제외','건수':len(out_of_period_failed)},
+        {'항목':'[3] 2021~2025년 유찰 공고(수의계약 포함)','건수':len(all_failed)},
+        {'항목':'[4] 분석기간 내 수의계약 유찰 제외','건수':len(private_failed)},
+        {'항목':'[5] 공식 경쟁성 유찰 추적 모집단','건수':len(detail)},
+        {'항목':'전체 유찰(수의계약 포함)','건수':len(all_failed)},
+        {'항목':'전체 수의계약 공고(결과무관)','건수':len(private_all)},
+        {'항목':'수의계약 중 결과확정','건수':int(private_all.result_status.isin(CONFIRMED_RESULTS).sum())},
+        {'항목':'수의계약 중 유찰','건수':len(private_failed)},
+        {'항목':'공식 경쟁성 유찰 원공고','건수':len(detail)},
+        {'항목':'공식 후속공고 확인','건수':int(detail.followup_found.sum())},
+        {'항목':'공식 결과확정 후속 재공고','건수':int(detail.followup_reannounce_result_known.sum())},
+    ])
+    if len(all_failed)!=len(detail)+len(private_failed):
+        raise RuntimeError('수의계약 제외 모집단 건수 보존 실패')
+    combined=build_integrated_outputs(detail,history,summary,validation,conservative_detail,
+                                      conservative_summary,metrics_90d,cohort_audit,
+                                      temporal_review,same_time_review,cutoff_review,
+                                      out_of_period,out,debug_history=args.debug)
+    print('[핵심 검증] 원공고',len(combined),'후속 연결',int(detail.followup_found.sum()),
+          '평균 소요일',round(float(detail.loc[detail.duration_valid,'delay_days'].mean()),3))
+    print('주의: 후속공고 미확인은 미재공고 확정이 아닙니다. 관측 소요일은 절감효과가 아닙니다.')
 
-    validation = make_validation(n, detail, summary)
-    metrics_90d = make_90day_metrics(detail)
-
-    # 보고서 필수 요약
-    report_columns = [
-        "구간", "추적 대상 건수",
-        "후속공고 확인 건수", "후속공고 미확인 건수",
-        "기간 계산 가능 건수", "후속공고 확인 비율(%)",
-        "평균(일)", "중앙값(일)", "Q1(일)", "Q3(일)",
-    ]
-
-    report = summary[report_columns].copy()
-
-    # 후속공고 전체 소요일 통계
-    broad_columns = [
-        "구간", "추적 대상 건수",
-        "후속공고 확인 건수", "후속공고 미확인 건수",
-        "후속공고 확인 비율(%)",
-        "후속공고 전체 기간 계산 가능 건수",
-        "후속공고 전체 평균(일)",
-        "후속공고 전체 중앙값(일)",
-        "후속공고 전체 Q1(일)",
-        "후속공고 전체 Q3(일)",
-    ]
-    broad = summary[broad_columns].copy()
-
-    # --------------------------------------------------------
-    # 9-3. 기존 CSV 출력
-    # --------------------------------------------------------
-    export(report, output_dir, "a5_required_metrics.csv")
-    export(broad, output_dir, "a5_all_followup_durations.csv")
-    export(out_of_period, output_dir, "a5_out_of_period_failures.csv")
-    export(summary, output_dir, "a5_summary.csv")
-    export(validation, output_dir, "a5_validation_report.csv")
-    export(detail, output_dir, "a5_followup_detail.csv")
-
-    export(
-        detail.loc[detail.followup_found],
-        output_dir,
-        "a5_followup_review.csv",
-    )
-    export(
-        detail.loc[~detail.followup_found],
-        output_dir,
-        "a5_unconfirmed_review.csv",
-    )
-    export(
-        detail.loc[detail.same_time_next],
-        output_dir,
-        "a5_same_time_review.csv",
-    )
-    export(
-        detail.loc[detail.duration_valid],
-        output_dir,
-        "a5_official_duration_rows.csv",
-    )
-    export(
-        history,
-        output_dir,
-        "a5_business_notice_history.csv",
-    )
-
-    # --------------------------------------------------------
-    # 9-4. 신규 검토 및 90일 CSV
-    # --------------------------------------------------------
-    export(
-        temporal_review,
-        output_dir,
-        "a5_temporal_order_review.csv",
-    )
-    export(
-        cutoff_review,
-        output_dir,
-        "a5_observation_cutoff_review.csv",
-    )
-    export(
-        same_time_review,
-        output_dir,
-        "a5_same_time_candidate_review.csv",
-    )
-    export(
-        metrics_90d,
-        output_dir,
-        "a5_90day_metrics.csv",
-    )
-
-    # --------------------------------------------------------
-    # 9-5. 기존 기관·계약방식·사업유형별 요약
-    # --------------------------------------------------------
-    for column in ("orntCode", "cntrctMth", "busiDivs"):
-        if column in detail.columns:
-            rows = [
-                summarize(group, f"{column}={name}")
-                for name, group in detail.groupby(column, dropna=False)
-            ]
-            export(
-                pd.DataFrame(rows),
-                output_dir,
-                f"a5_by_{column}.csv",
-            )
-
-    # --------------------------------------------------------
-    # 9-6. 수정 전후 비교
-    # --------------------------------------------------------
-    compare_with_baseline(detail, output_dir)
-
-    # --------------------------------------------------------
-    # 9-7. 보고서용 PNG 4개 생성
-    # --------------------------------------------------------
-    create_a5_plots(detail, output_dir)
-
-    # --------------------------------------------------------
-    # 9-8. 콘솔 검증 결과
-    # --------------------------------------------------------
-    print("\n=== A5 보고서 필수 지표 ===")
-    print(report.to_string(index=False))
-
-    print("\n=== 기존 문서 수치 비교 ===")
-    print(validation.to_string(index=False))
-
-    print("\n=== 90일 민감도 분석 ===")
-    print(metrics_90d.to_string(index=False))
-
-    print("\n=== 후속공고 연결 검토 ===")
-    print(f"유찰 원공고: {len(detail):,}건")
-    print(f"후속공고 확인: {int(detail.followup_found.sum()):,}건")
-    print(
-        "결과확정 후속 재공고:",
-        f"{int(detail.followup_reannounce_result_known.sum()):,}건",
-    )
-    print(
-        "동일 개찰시각 관련 원공고:",
-        f"{int(detail.same_time_next.sum()):,}건",
-    )
-    print(f"동일 개찰시각 후보 행: {len(same_time_review):,}건")
-    print(
-        "시간 역전 관련 원공고:",
-        f"{int(detail.temporal_order_review.sum()):,}건",
-    )
-    print(f"시간 역전 후보 행: {len(temporal_review):,}건")
-    print(
-        "후속공고 개찰일 관측기간 초과:",
-        f"{int(detail.next_opening_after_cutoff.sum()):,}건",
-    )
-
-    print("\n" + "=" * 65)
-    print("A5 분석 완료")
-    print(f"결과 폴더: {output_dir}")
-    print("=" * 65)
-
-    print("※ 미확인 공고를 미재공고로 해석하지 마세요.")
-    print("※ 문서 참고값과의 차이는 검증 CSV에서 확인하세요.")
-    print("※ 결과확정일 부재에 따른 관측 한계를 보고서에 명시하세요.")
-
-
-# ============================================================
-# 10. VS Code 실행 버튼 지원
-# ============================================================
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
