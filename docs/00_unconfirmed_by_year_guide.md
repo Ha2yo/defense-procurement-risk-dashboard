@@ -2,7 +2,7 @@
 
 ## 1. 목적과 분석 범위
 
-입찰공고의 결과 연결 상태를 **공고 단위**로 구분하고, 실제 공고일(`pblancDate`) 기준으로 **연도별 결과 미확인 건수와 비율**을 산정한다. 이후 기관·계약방법·사업구분 분석~공고 시기 분석의 유찰률 분석과 KPI 평가에서 결과 미확인 공고를 유찰이나 낙찰로 임의 분류하지 않기 위한 선행 점검이다.
+입찰공고의 결과 연결 상태를 **공고 단위**로 구분하고, 실제 공고일(`pblancDate`) 기준으로 **연도별 결과 미확인 건수와 비율**을 산정한다. 유찰률을 계산하는 다른 분석에서 결과 미확인 공고를 유찰이나 낙찰로 임의 분류하지 않기 위한 선행 점검이다.
 
 - **공식 실행 코드:** [`scripts/analysis/00_unconfirmed_by_year.py`](../scripts/analysis/00_unconfirmed_by_year.py)
 - **커밋된 결과:** [`data/analysis/unconfirmed_by_year.csv`](../data/analysis/unconfirmed_by_year.csv)
@@ -55,7 +55,7 @@ python scripts/analysis/00_unconfirmed_by_year.py
 
 코드는 각각 소수점 둘째 자리까지 반올림한다. 합계 행의 첫 번째 비율은 전체 공고 대비 미확인률, 두 번째 비율은 100.00%이다.
 
-## 5. GitHub에 저장된 결과
+## 5. 실행 결과
 
 **출처:** [`data/analysis/unconfirmed_by_year.csv`](../data/analysis/unconfirmed_by_year.csv) — 이 파일에서 직접 확인한 결과.
 
@@ -94,4 +94,3 @@ python scripts/analysis/00_unconfirmed_by_year.py
 - **미확인의 의미:** 직접 결과가 없다고 모두 결과 미확인은 아니다. 취소공고와 동일사업 다른 공고 결과 존재는 별도 상태다.
 - **사후 결과 정보:** 입찰결과 연결은 결과 상태를 진단하기 위한 것이며, 신규 공고의 사전 위험도 입력 피처로 사용하지 않는다.
 - **개찰일 역전:** 공고일보다 개찰일이 빠른 공고를 검사·제외하는 로직은 **이 00번 스크립트에 없다**. 해당 점검은 별도 분석·검증의 범위로 구분해야 한다.
-- **재현 확인:** 현재 로컬 CLEAN을 이용해 스크립트를 재실행한 뒤, 생성된 CSV를 GitHub에 커밋된 결과와 비교한다. 이번 가이드는 GitHub 코드·저장된 출력에 근거하며 현 환경에서 CLEAN 재실행까지 수행한 것은 아니다.
