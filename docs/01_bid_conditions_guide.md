@@ -108,5 +108,5 @@ Import-Csv -Encoding UTF8 data/analysis/results/chi2_summary.csv | Format-Table 
 3. `chi2_summary.csv`에서 주 검정 3개 Holm 보정값, 조합 참고 검정 제외 여부 확인.
 4. 기대빈도 5 미만 칸 비율과 소범주 병합 후 범주 수 확인.
 
-6. 각 출력 표의 건수와 검정값이 동일한 분석 집단을 기준으로 계산됐는지 확인한다.
+5. 각 출력 표의 건수와 검정값이 동일한 분석 집단을 기준으로 계산됐는지 확인한다.
 
