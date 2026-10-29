@@ -23,7 +23,7 @@ BASE_KEYS = ["기관그룹", "busiDivs", "cntrctMth"]
 STEPS = [BASE_KEYS, ["기관그룹", "busiDivs"], ["기관그룹"], []]
 AMOUNT_KEYS = BASE_KEYS + ["사업규모구간"]
 # 화면에 보여 줄 조건 이름 (데이터 열 이름 대신 한글)
-KEY_LABELS = {"기관그룹": "기관그룹", "busiDivs": "사업구분", "cntrctMth": "계약방법", "사업규모구간": "금액 구간"}
+KEY_LABELS = {"기관그룹": "기관그룹", "busiDivs": "사업유형", "cntrctMth": "계약방법", "사업규모구간": "사업규모금액"}
 AMOUNT_STEPS = [AMOUNT_KEYS] + STEPS
 MIN_SAMPLE = 10
 TRAIN_START, TRAIN_END, TARGET_YEAR = 2021, 2024, 2025
@@ -454,9 +454,9 @@ def keyword_view(found):
         "개찰일": found["개찰일"].dt.strftime("%Y-%m-%d"),
         "발주기관": found["ornt"],
         "공고명": found["bidNm"],
-        "사업구분": found["busiDivs"],
+        "사업유형": found["busiDivs"],
         "계약방법": found["cntrctMth"],
-        "금액 구간": found["사업규모구간"],
+        "사업규모금액 구간": found["사업규모구간"],
         "결과": found["결과"],
         "공고키": found["noticeKey"],
     })
@@ -504,7 +504,7 @@ def render_keyword_search(pool, inp):
         )
     with c2:
         typed = st.text_input("직접 입력 (쉼표로 여러 개)", key=f"{key}_typed")
-    same_business = st.checkbox(f"같은 사업구분({inp.get('busiDivs')})만", value=False, key=f"{key}_biz")
+    same_business = st.checkbox(f"같은 사업유형({inp.get('busiDivs')})만", value=False, key=f"{key}_biz")
     keywords = picked + [w.strip() for w in typed.split(",") if w.strip()]
     if not keywords:
         st.info("키워드를 하나 이상 고르거나 입력해 주세요")
@@ -611,7 +611,7 @@ def add_sibling_result(notices, all_notices):
     """'동일사업 다른 공고 결과' 공고에 같은 사업의 최종 결과를 붙인다. 화면 표시용이며 결과상태·집계는 바꾸지 않는다.
 
     같은 사업키에서 입찰결과가 직접 있는 다른 공고 중 개찰시각이 가장 늦은 공고(사업의 최종 결과)를 쓴다.
-    같은 사업 공고는 기관·사업구분·계약방법·공고명이 모두 같아 위험도 조건도 같다.
+    같은 사업 공고는 기관·사업유형·계약방법·공고명이 모두 같아 위험도 조건도 같다.
     """
     out = notices.copy()
     out[["형제결과", "형제출처", "형제이력"]] = pd.NA
@@ -700,9 +700,9 @@ def notice_table(notices):
         "공고명": view["bidNm"],
         "발주기관": view["ornt"],
         "기관그룹": view["기관그룹"],
-        "사업구분": view["busiDivs"],
+        "사업유형": view["busiDivs"],
         "계약방법": view["cntrctMth"],
-        "금액 구간": view["사업규모구간"],
+        "사업규모금액 구간": view["사업규모구간"],
         "실제 결과": [result_text(s, sib) for s, sib in zip(view["결과상태"], view["형제결과"])],
     })
 
@@ -852,19 +852,19 @@ def render():
                     st.dataframe(table.drop(columns="실제 결과"), hide_index=True, use_container_width=True,
                                  height=280)
     with tab_manual:
-        st.caption("공고번호 없이도 조건과 사업금액을 입력해 4변수 위험도를 조회할 수 있습니다")
+        st.caption("공고번호 없이도 조건과 사업규모금액을 입력해 4변수 위험도를 조회할 수 있습니다")
         with st.form("risk_manual_form"):
             c1, c2 = st.columns(2)
             with c1:
                 # 위험도는 특정 조합의 과거 유찰률이라 '전체' 선택지는 두지 않고, 빈 줄 대신 안내 문구를 보인다
                 org = st.selectbox("기관그룹", [v for v in choices(train, "기관그룹") if v != "미분류"],
                                    index=None, placeholder="기관그룹을 선택하세요")
-                business = st.selectbox("사업구분", choices(train, "busiDivs"),
-                                        index=None, placeholder="사업구분을 선택하세요")
+                business = st.selectbox("사업유형", choices(train, "busiDivs"),
+                                        index=None, placeholder="사업유형을 선택하세요")
             with c2:
                 methods = [m for m in choices(train, "cntrctMth") if "수의" not in m]
                 method = st.selectbox("계약방법", methods, index=None, placeholder="계약방법을 선택하세요")
-            manual_amount = st.number_input("사업금액 (원) — 4변수 위험도용", min_value=0, value=0, step=1_000_000,
+            manual_amount = st.number_input("사업규모금액 (원) — 4변수 위험도용", min_value=0, value=0, step=1_000_000,
                                             help="0원은 금액 미입력을 뜻하며, 이 경우 3변수 위험도로 대체합니다")
             manual_name = st.text_input("공고명 (선택) — 과거 사례 키워드 검색용", placeholder="예: 냉동 핫도그 구매",
                                         help="적으면 아래 '공고명 키워드 검색'에 키워드 후보가 자동으로 나옵니다. "
@@ -899,11 +899,11 @@ def render():
             st.caption(f'공고키: {inp["noticeKey"]}')
         c1, c2, c3 = st.columns(3)
         c1.metric("기관그룹", inp["기관그룹"])
-        c2.metric("사업구분", inp["busiDivs"])
+        c2.metric("사업유형", inp["busiDivs"])
         c3.metric("계약방법", inp["cntrctMth"])
         amount = inp.get("사업규모금액")
-        st.write(f'**사업금액:** {float(amount):,.0f}원' if pd.notna(amount) else '**사업금액:** 미확인')
-        st.caption(f'금액 구간(학습 5분위): {inp.get("사업규모구간") if pd.notna(inp.get("사업규모구간")) else "미분류"} · '
+        st.write(f'**사업규모금액:** {float(amount):,.0f}원' if pd.notna(amount) else '**사업규모금액:** 미확인')
+        st.caption(f'사업규모금액 구간(학습 5분위): {inp.get("사업규모구간") if pd.notna(inp.get("사업규모구간")) else "미분류"} · '
                    f'출처: {inp.get("금액출처", "미확인")}')
 
     try:
@@ -983,7 +983,7 @@ def render():
         boundaries_text = " / ".join(f"{value:,.0f}" for value in boundaries)
         st.caption(
             f"5분위 경계(2021~2024년 학습): {boundaries_text}원. "
-            "2025년 결과는 학습·금액 구간 산출에 사용하지 않습니다"
+            "2025년 결과는 학습·사업규모금액 구간 산출에 사용하지 않습니다"
         )
         if inp.get("입찰방법출처") == "입찰결과_사후복원":
             st.warning("이 공고의 입찰방법은 사후 입찰결과에서 복원된 값입니다")
@@ -997,14 +997,14 @@ def render():
             view = history.sort_values(["공고일", "noticeKey"], ascending=[False, True]).head(100)[columns].copy()
             view["공고일"] = view["공고일"].dt.strftime("%Y-%m-%d")
             korean = {"pblancNo": "공고번호", "bidNm": "공고명", "ornt": "발주기관",
-                      "busiDivs": "사업구분", "cntrctMth": "계약방법", "결과상태": "실제결과", "noticeKey": "공고키"}
+                      "busiDivs": "사업유형", "cntrctMth": "계약방법", "결과상태": "실제결과", "noticeKey": "공고키"}
             st.dataframe(view.rename(columns=korean), hide_index=True, use_container_width=True)
             download_cols = history[columns].copy()
             download_cols["공고일"] = download_cols["공고일"].dt.strftime("%Y-%m-%d")
             download_cols = download_cols.rename(columns=korean)
             st.download_button("전체 유사공고 CSV", download_cols.to_csv(index=False).encode("utf-8-sig"),
                                file_name="historical_comparable_notices.csv", mime="text/csv")
-            st.caption("2025년 입찰결과는 위험도 학습·금액 구간·유사공고 집계에 사용하지 않습니다")
+            st.caption("2025년 입찰결과는 위험도 학습·사업규모금액 구간·유사공고 집계에 사용하지 않습니다")
         with tab_keyword:
             st.caption(f"공고명 키워드로 {KEYWORD_YEARS[0]}~{KEYWORD_YEARS[1]}년 경쟁성 공고(취소공고·수의계약 제외)를 찾습니다. "
                        "공고 선택 시 그 공고의 공고일 전에 개찰된 공고만으로 유찰률을 계산합니다")
