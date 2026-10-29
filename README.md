@@ -88,7 +88,7 @@ API_KEY_DATA_PORTAL=...
 | 2. 공고기간 ([가이드](docs/02_bid_period_guide.md)) | `02_bid_period_preprocess.py` → `02_bid_period_analysis.py` → `02_bid_period_year_compare.py` → `analysis/bid_period/` |
 | 3. 금액 구간 (사업규모금액 5분위) ([가이드](docs/03_bid_amount_guide.md)) | `03_bid_amount_analysis.py` → `analysis/bid_amount/` |
 | 4. 공고 시기 ([가이드](docs/04_bid_timing_guide.md)) | `04_bid_timing_analysis.py` → `analysis/bid_timing/` |
-| 5. 유찰 후 재공고 ([가이드](docs/05_rebid_followup_guide.md)) | `05_rebid_followup_analysis.py` → `analysis/a5_output_project/` (요약: `analysis/rebid_followup/`) |
+| 5. 유찰 후 재공고 ([가이드](docs/05_rebid_followup_guide.md)) | `05_rebid_followup_analysis.py` → `analysis/rebid_followup/` (CSV 14개·PNG 7개) |
 
 ### ⑤ 위험도·KPI (분석 계획표 6번) — `scripts/kpi/`
 공식 위험도 = 2021~2023년 결과확정 경쟁성 공고의 **기관그룹 × 계약방법 × 사업구분 × 사업규모금액 5분위** 조합별 유찰률
