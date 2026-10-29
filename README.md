@@ -85,7 +85,7 @@ API_KEY_DATA_PORTAL=...
 |---|---|
 | 사전 점검: 연도별 결과 미확인 ([가이드](docs/00_unconfirmed_by_year_guide.md)) | `00_unconfirmed_by_year.py` → `analysis/unconfirmed_by_year.csv` |
 | 1. 기관·계약방법·사업구분 ([가이드](docs/01_bid_conditions_guide.md)) | `01_bid_conditions_prepare.py` → `01_bid_conditions_analysis.py` → `analysis/results/` |
-| 2. 공고기간 | `02_bid_period_preprocess.py` → `02_bid_period_analysis.py` → `02_bid_period_year_compare.py` → `analysis/bid_period/` |
+| 2. 공고기간 ([가이드](docs/02_bid_period_guide.md)) | `02_bid_period_preprocess.py` → `02_bid_period_analysis.py` → `02_bid_period_year_compare.py` → `analysis/bid_period/` |
 | 3. 금액 구간 (사업규모금액 5분위) | `03_bid_amount_analysis.py` → `analysis/bid_amount/` |
 | 4. 공고 시기 | `04_bid_timing_analysis.py` → `analysis/bid_timing/` |
 | 5. 유찰 후 재공고 ([가이드](docs/05_rebid_followup_guide.md)) | `05_rebid_followup_analysis.py` → `analysis/a5_output_project/` (요약: `analysis/rebid_followup/`) |
