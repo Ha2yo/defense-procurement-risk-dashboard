@@ -130,11 +130,11 @@ def _build_followup_table(notice_mtime, result_mtime):
         & notice["pblanc_date"].notna()
         & notice["openg_dt"].notna()
         & notice["pblanc_date"].le(OBS_END),
-        ["businessKey", "noticeKey", "pblancSe", "pblanc_date", "openg_dt", "notice_round"],
+        ["businessKey", "noticeKey", "pblancSe", "pblanc_date", "openg_dt", "notice_round", "cntrctMth"],
     ]
     cand = cand.rename(columns={"noticeKey": "next_key", "pblancSe": "next_se",
                                 "pblanc_date": "next_pblanc_date", "openg_dt": "next_openg",
-                                "notice_round": "next_round"})
+                                "notice_round": "next_round", "cntrctMth": "next_mth"})
     pairs = origin[["businessKey", "noticeKey", "origin_openg"]].merge(cand, on="businessKey")
     pairs = pairs[
         (pairs["next_key"] != pairs["noticeKey"])
@@ -145,7 +145,7 @@ def _build_followup_table(notice_mtime, result_mtime):
         pairs.sort_values(["noticeKey", "next_openg", "next_pblanc_date", "next_round", "next_key"],
                           na_position="last", kind="stable")
         .drop_duplicates("noticeKey")
-        [["noticeKey", "next_key", "next_se", "next_pblanc_date", "next_openg"]]
+        [["noticeKey", "next_key", "next_se", "next_pblanc_date", "next_openg", "next_mth"]]
     )
 
     # 5) 후속 상태 / 재공고 여부 / 추가 소요일
@@ -168,6 +168,9 @@ def _build_followup_table(notice_mtime, result_mtime):
         default=STATUS_CONFIRMED,
     )
     df["is_rebid"] = df["next_se"].eq("재공고").fillna(False).astype(bool)
+    # 후속공고가 수의계약으로 바뀐 경우 (화면 주석에 실제 건수를 적는다)
+    df["next_private"] = has_followup & df["next_mth"].astype("string").str.contains(
+        PRIVATE_KEYWORD, na=False, regex=False)
     df["next_type"] = np.where(has_followup, df["next_se"].fillna("구분 미상"), "후속공고 없음")
     # 후속공고의 결과 (관측 종료일 이후 개찰이면 결과 미확인)
     # string 타입은 비교 결과에 <NA>가 섞여 np.select가 거부하므로 일반 문자열로 바꾸고 빈칸은 ""로 채움
@@ -284,7 +287,7 @@ STATUS_FILTERS = {
     "전체": None,
     "후속공고 확인": lambda d: d["has_followup"],
     "후속 재공고 결과확정": lambda d: d["is_delay_target"],
-    "후속입찰 미확인": lambda d: ~d["has_followup"],
+    "후속공고 미확인": lambda d: ~d["has_followup"],  # 분석계획표·데이터 항목정의서 용어
 }
 
 DETAIL_COLUMNS = {
@@ -407,7 +410,8 @@ def render():
         delta=f"중앙값 {_days(s['delay']['median'], 0)}", delta_color="off",
     )
     st.caption(f"추적 대상은 경쟁성 유찰 원공고이며 원공고가 수의계약인 유찰 {private_excluded:,}건은 제외  \n"
-               "후속공고가 수의계약으로 바뀐 경우는 후속공고로 포함")
+               "후속공고가 수의계약으로 바뀐 경우도 후속공고로 포함 "
+               f"(해당 {int(base['next_private'].sum()):,}건)")
     if status != "전체":
         st.caption("※ 상단 지표와 상태 분포는 연도·분기 필터 기준, 아래 유형·분포·상세는 후속 데이터 상태 필터까지 반영됩니다")
 
@@ -577,7 +581,7 @@ def render():
                 # 세로축 이름은 글자를 돌리지 않고 화면 1처럼 차트 제목에 단위와 함께 쓴다
                 box.update_layout(title="추가 소요일 분포 (단위: 일)", margin=dict(t=55))
                 st.plotly_chart(box, use_container_width=True)
-                st.caption("세로축 = 추가 소요일(일) · 상자 = Q1~Q3, 가운데 선 = 중앙값, 점 = 1.5×IQR 밖 사례")
+                st.caption("상자 = Q1~Q3, 가운데 선 = 중앙값, 점 = 1.5×IQR 밖 사례")
 
         with st.container(border=True):
             st.subheader("90일 이내 연결률")
@@ -591,4 +595,4 @@ def render():
         st.write("- 재공고 판정: 후속공고의 공고구분(pblancSe)에 '재공고' 포함 여부")
         st.write("- 추가 소요일: 후속 재공고의 개찰일 − 직전 유찰 공고의 개찰일")
         st.write("- 개찰일 차이 0일 사례는 평균·분포에서 제외하고 건수만 별도 표시")
-        st.write("- 후속입찰 미확인 사례는 '재공고 없음'으로 단정하지 않고 별도 상태로 보존")
+        st.write("- 후속공고 미확인 사례는 '재공고 없음'으로 단정하지 않고 별도 상태로 보존")
