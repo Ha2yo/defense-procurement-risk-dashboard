@@ -47,7 +47,7 @@ python scripts/analysis/02_bid_period_year_compare.py
 python scripts/analysis/02_bid_period_year_compare.py --overwrite
 ```
 
-## 4. 실제 GitHub CSV와 대조한 모집단·기술통계
+## 4. 분석 모집단과 기술통계
 
 | 항목 | 2021~2023년 | 2024년 |
 |---|---:|---:|
@@ -59,7 +59,7 @@ python scripts/analysis/02_bid_period_year_compare.py --overwrite
 | Q1 / Q3 | 5일 / 7일 | 5일 / 7일 |
 | 최소 / 최대 | 0일 / 62일 | 0일 / 52일 |
 
-자료: `period_distribution_2021_2023.csv`, `period_distribution_2024_2024.csv`. 21,092/6,786의 기간 적용 이전 값과 7/1 제외 사유는 분석 계획표의 설명이므로 로컬 CLEAN에 대한 원인별 상세 재실행으로 추가 검증할 수 있다.
+자료: `period_distribution_2021_2023.csv`, `period_distribution_2024_2024.csv`.
 
 ## 5. 공고기간 구간별 실제 건수 및 유찰률
 
@@ -103,7 +103,7 @@ python scripts/analysis/02_bid_period_year_compare.py --overwrite
 
 연도별 상세 기록: [`yearly_period_group_failure_2021_2024.csv`](../data/analysis/bid_period/year_comparison/yearly_period_group_failure_2021_2024.csv). 시각화: `period_failure_rate_comparison.png`, `yearly_failure_rate_trend.png`.
 
-`02_bid_period_year_compare.py`는 전처리 데이터로 각 기간의 검정을 다시 계산해 저장된 연도별 카이제곱 CSV와 비교하며, 불일치 시 중단한다. **단, GitHub에는 비교 코드가 생성하도록 정의된 `period_chi_square_comparison_2021_2023_vs_2024.csv`가 현재 커밋돼 있지 않다.** 로컬 실행 시 생성 여부를 확인하고 필요하면 산출물을 추가해야 한다.
+`02_bid_period_year_compare.py`는 전처리 데이터로 기간별 검정을 다시 계산해 연도별 카이제곱 결과와 일치하는지 확인한다. 기존 비교 출력물이 있을 경우 `--overwrite` 지정 여부에 따라 덮어쓰기 동작을 제어한다.
 
 ## 8. 생성 파일 목록
 
