@@ -44,7 +44,7 @@ import matplotlib.ticker as mticker
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data" / "clean"
-OUTPUT_DIR = PROJECT_ROOT / "data" / "analysis" / "a5_output_csv_png"
+OUTPUT_DIR = PROJECT_ROOT / "data" / "analysis" / "rebid_followup"
 BASELINE_DIR = PROJECT_ROOT / "data" / "analysis" / "a5_output_before_fix"
 
 START_DATE = pd.Timestamp("2021-01-01")
