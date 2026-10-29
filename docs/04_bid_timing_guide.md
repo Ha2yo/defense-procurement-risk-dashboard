@@ -46,7 +46,7 @@ python scripts/analysis/04_bid_timing_analysis.py --skip-plots
 
 월·분기 집계 CSV에는 `all_notices`(전체 공고), `analysis_n`(해당 분석 모집단), `fail_n`(유찰) 등이 함께 있다. **유찰률 분모는 `analysis_n`이며 `all_notices`가 아니다**. 결과 연결률과 확정률은 별도 지표다.
 
-## 4. 분석 결과 예시
+## 4. 분기별 분석 결과
 
 | 분기 | 공고 수 | 유찰 건수 | 유찰률 |
 |---|---:|---:|---:|
@@ -100,7 +100,7 @@ python scripts/analysis/04_bid_timing_analysis.py --skip-plots
 
 - 코드 주석의 기관·계약방법·사업구분 분석 참조 집계 **21,130건**과 공고 시기 분석의 **21,092건**은 **기간 기준·분석 단위가 다르다**.
 
-- README·문서·CSV에 동일한 명칭의 기관·계약방법·사업구분 분석이 쓰였는지 확인하고, 참고 비교라는 점을 명시한다.
+- 표본 비교는 공고일·개찰일과 공고·품목행이라는 단위 차이를 설명하기 위한 참고 자료다.
 
 ## 9. 출력 파일 안내
 
@@ -127,7 +127,7 @@ python scripts/analysis/04_bid_timing_analysis.py --skip-plots
 
 ## 10. 실행 결과 확인
 
-현재 GitHub `main`에는 **공고 시기 분석의 CSV/PNG가 커밋돼 있지 않다**. 원천 CLEAN을 준비한 로컬 환경에서:
+기본 출력 경로는 `data/analysis/bid_timing/`이며, 실행 시 분석 결과가 이 위치에 저장된다.
 
 ```powershell
 cd C:\workspace\defense-procurement-risk-dashboard
@@ -145,5 +145,3 @@ Import-Csv -Encoding UTF8 data/analysis/bid_timing/a4_10_validation.csv | Format
 4. `a4_08_logistic_results.csv`의 `converged` 확인.
 
 6. 기관·계약방법·사업구분 분석 참조 21,130건과 공고 시기 분석 21,092건의 기간·행단위 차이를 유지.
-
-**권장 관리:** 팀 정책상 공개 가능하다면 `data/analysis/bid_timing/`의 검증된 산출물을 GitHub에 추가하여 다른 공고기간 분석·사업규모금액 분석·후속공고 분석와 동일한 재현성 기준으로 관리한다.
