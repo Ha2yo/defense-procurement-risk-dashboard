@@ -50,6 +50,14 @@ MIN_CATEGORY_SIZE = 30  # 계약·경쟁방식: 이보다 작은 범주는 '기�
 ETC = "기타"
 ALPHA = 0.05
 
+# 변수별 요약표는 문서(분석계획표 1-4·정의서 5-2) 검정 기준을 따른다:
+# 계약방법은 2단계경쟁 동시·분리를 통합, 2×2 교차표는 연속성 보정, 6개 검정을 한 묶음으로 Holm 보정
+SUMMARY_MERGE = {"계약·경쟁방식": {"2단계경쟁(동시)": "2단계경쟁", "2단계경쟁(분리)": "2단계경쟁"}}
+RISK_DECISION = {  # 2021~2023년 기준 기간 검정으로 정한 팀 결정 (기간을 바꿔도 그대로)
+    "기관그룹": "채택", "사업유형": "채택", "계약·경쟁방식": "채택", AMOUNT: "채택",
+    "공고기간": "제외", "공고 시기": "제외",
+}
+
 
 # ============================================================
 # 2. 데이터 준비
@@ -352,14 +360,20 @@ def _gammaincc(a, x):
     return math.exp(-x + a * math.log(x) - gln) * h
 
 
-def chi_square_test(table):
-    """범주 × 유찰여부 교차표의 카이제곱 독립성 검정과 Cramér's V."""
+def chi_square_test(table, correction=False):
+    """범주 × 유찰여부 교차표의 카이제곱 독립성 검정과 Cramér's V.
+
+    correction=True면 자유도 1(2×2)일 때 Yates 연속성 보정 (scipy chi2_contingency 기본값과 같음).
+    """
     observed = table.to_numpy(dtype=float)
     n = observed.sum()
     expected = observed.sum(axis=1, keepdims=True) * observed.sum(axis=0, keepdims=True) / n
-    chi2 = float(((observed - expected) ** 2 / expected).sum())
     r, c = observed.shape
     dof = (r - 1) * (c - 1)
+    diff = np.abs(observed - expected)
+    if correction and dof == 1:
+        diff = diff - np.minimum(0.5, diff)
+    chi2 = float((diff ** 2 / expected).sum())
     p_value = _gammaincc(dof / 2, chi2 / 2)
     cramers_v = math.sqrt(chi2 / (n * (min(r, c) - 1)))
     return {
@@ -393,8 +407,9 @@ def summarize(data, order=None, small_label=None):
 
 
 def strength_label(v):
+    # 분석계획표 1-4와 같은 기준·표현
     if v < 0.1:
-        return "매우 약함"
+        return "무시할 수준"
     if v < 0.3:
         return "약함"
     if v < 0.5:
@@ -409,6 +424,84 @@ def md_safe(text):
 
 def format_p(p):
     return "< 0.001" if p < 0.001 else f"{p:.3f}"
+
+
+SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def format_p_exact(p):
+    """요약표용 p값: 0.001 미만은 문서처럼 3.32×10⁻⁵⁷ 형식."""
+    if p >= 0.001:
+        return f"{p:.4f}"
+    mantissa, exponent = f"{p:.2e}".split("e")
+    return f"{mantissa}×10{str(int(exponent)).translate(SUPERSCRIPT)}"
+
+
+def holm(p_values):
+    """Holm 보정 p값 (입력 순서 유지). 작은 p부터 (m - 순위) 배하고 앞 값보다 작아지지 않게 누적 최대."""
+    m = len(p_values)
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, i in enumerate(sorted(range(m), key=lambda k: p_values[k])):
+        running = max(running, min(1.0, (m - rank) * p_values[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def test_table(df, factor, order):
+    """검정용 교차표 (문서 기준 범주: 계약방법은 2단계경쟁 동시·분리 통합). 요약표·변수별 상세가 함께 쓴다."""
+    data = df[[FACTOR_COLUMNS[factor], "fail"]].rename(columns={FACTOR_COLUMNS[factor]: "category"})
+    data = data.dropna(subset=["category"]).astype({"category": str})
+    data["category"] = data["category"].replace(SUMMARY_MERGE.get(factor, {}))
+    return data, *summarize(data, order.get(factor))
+
+
+def factor_overview(df, order):
+    """모든 변수의 카이제곱 검정을 한 표로 (문서 기준: 계약방법 2단계경쟁 통합, 2×2 연속성 보정, 6개 Holm)."""
+    rows = []
+    for factor in FACTORS:
+        data, table, summary = test_table(df, factor, order)
+        if len(table) < 2:
+            continue
+        stats = chi_square_test(table, correction=True)
+        # 최고·최저 유찰률 범주 (차이가 소표본 때문에 커 보이는지 확인용)
+        top = summary.loc[summary["유찰률(%)"].idxmax()]
+        bottom = summary.loc[summary["유찰률(%)"].idxmin()]
+        rows.append({
+            "변수": factor,
+            "분석 건수": len(data),
+            "범주 수": len(table),
+            "χ²": stats["chi2"],
+            "자유도": stats["dof"],
+            "p": stats["p_value"],
+            "Cramér's V": stats["cramers_v"],
+            "유찰률 차이(%p)": summary["유찰률(%)"].max() - summary["유찰률(%)"].min(),
+            "끝 범주": [(top["범주"], int(top["공고 수"])), (bottom["범주"], int(bottom["공고 수"]))],
+        })
+    overview = pd.DataFrame(rows)
+    if overview.empty:
+        return overview
+    overview["Holm 보정 p"] = holm(overview["p"].tolist())
+    overview["판정"] = np.where(overview["Holm 보정 p"] < ALPHA, "유의", "유의하지 않음")
+    overview["연관성 크기"] = overview["Cramér's V"].map(strength_label)
+    overview["위험도 반영"] = overview["변수"].map(RISK_DECISION)
+    return overview.sort_values("Cramér's V", ascending=False, ignore_index=True)
+
+
+SMALL_SHARE = 0.01  # 최고·최저 범주 공고가 분석 건수의 1% 미만이면 유찰률 차이가 과장될 수 있다고 안내
+
+
+def small_extreme_notes(overview):
+    """유찰률 차이가 건수 적은 범주 때문에 커 보이는 변수 안내 (예: 계약방법의 협상에의한계약(서류))."""
+    notes = []
+    for _, r in overview.iterrows():
+        small = [f"{name}({n:,}건)" for name, n in r["끝 범주"] if n < r["분석 건수"] * SMALL_SHARE]
+        if small:
+            v = r["Cramér's V"]
+            notes.append(
+                f"※ {r['변수']} 유찰률 차이 {r['유찰률 차이(%p)']:.2f}%p는 공고가 적은 {' · '.join(small)} "
+                f"때문에 커 보이는 값입니다. 연관성 크기는 V {v:.3f}로 {r['연관성 크기']}입니다")
+    return notes
 
 
 # ============================================================
@@ -514,6 +607,46 @@ def wave_gap_path(x0, y, width, amp, points=12):
     return "M " + " L ".join(f"{x:.3f},{yy:.3f}" for x, yy in left + right) + " Z"
 
 
+def overview_chart(overview):
+    """변수별 Cramér's V 가로 막대. 색 = Holm 보정 후 유의 여부, 점선 = V 0.1(약함 기준)."""
+    # 유의해도 위험도에서 뺀 변수(예: 공고 시기)는 라벨 끝에 표시해 채택 변수와 구분한다
+    chart_df = overview.assign(label=[
+        f"V {v:.3f} · Holm p {format_p_exact(p)}" + (" · 위험도 제외" if d == "제외" else "")
+        for v, p, d in zip(overview["Cramér's V"], overview["Holm 보정 p"], overview["위험도 반영"])
+    ])
+    fig = px.bar(
+        chart_df, x="Cramér's V", y="변수", orientation="h", color="판정", text="label",
+        color_discrete_map={"유의": ui.COLOR_HIGHLIGHT, "유의하지 않음": ui.COLOR_MUTED},
+        custom_data=["χ²", "자유도", "위험도 반영"],
+    )
+    fig.update_traces(
+        textposition="outside",
+        hovertemplate="%{y}<br>Cramér's V %{x:.3f}<br>χ² %{customdata[0]:,.2f} (자유도 %{customdata[1]})"
+                      "<br>위험도 %{customdata[2]}<extra></extra>",
+    )
+    fig.update_yaxes(title=None, categoryorder="array", categoryarray=list(chart_df["변수"])[::-1])
+    # x축 끝은 최댓값에 비례 (0.1 기준선은 항상 보이게). 막대 옆 라벨이 길어 1.4배 여유
+    fig.update_xaxes(title="Cramér's V (연관성 크기)", range=[0, max(chart_df["Cramér's V"].max(), 0.1) * 1.4])
+    fig.add_vline(
+        x=0.1, line_dash="dash", line_color=ui.COLOR_REFERENCE, line_width=2, layer="below",
+        annotation_text="0.1 (약함 기준)", annotation_position="top",
+        annotation_font=dict(color=ui.COLOR_REFERENCE, size=12),
+    )
+    fig = ui.style_figure(fig, ui.hbar_height(len(chart_df)))
+    # 유의 여부 색 구분을 읽을 수 있게 범례만 켠다 (차트 아래)
+    fig.update_layout(showlegend=True, legend=dict(title=None, orientation="h", y=-0.25, x=0),
+                      margin=dict(l=130))  # 변수 이름(사업규모금액(5분위))이 잘리지 않게
+    return fig
+
+
+def overview_view(overview):
+    view = overview.copy()
+    view["χ² (자유도)"] = [f"{c:,.2f} ({d})" for c, d in zip(view["χ²"], view["자유도"])]
+    view["Holm 보정 p"] = view["Holm 보정 p"].map(format_p_exact)
+    return view[["변수", "분석 건수", "범주 수", "χ² (자유도)", "Holm 보정 p", "Cramér's V",
+                 "유찰률 차이(%p)", "판정", "연관성 크기", "위험도 반영"]]
+
+
 def crosstab_view(summary):
     total = pd.DataFrame([{
         "범주": "합계",
@@ -532,17 +665,17 @@ def interpretation(factor, period, summary, stats, overall_rate, small_label=Non
     lines = []
     if stats["p_value"] < ALPHA:
         lines.append(
-            f"- **유의성**: p-value {format_p(stats['p_value'])} (< {ALPHA}) → "
+            f"- **유의성**: Holm 보정 p-value {format_p_exact(stats['p_value'])} (< {ALPHA}) → "
             f"{period} 공고에서 **{factor}에 따라 유찰률이 통계적으로 다릅니다**"
         )
     else:
         lines.append(
-            f"- **유의성**: p-value {format_p(stats['p_value'])} (≥ {ALPHA}) → "
+            f"- **유의성**: Holm 보정 p-value {format_p_exact(stats['p_value'])} (≥ {ALPHA}) → "
             f"{factor}에 따른 유찰률 차이가 통계적으로 확인되지 않습니다"
         )
     lines.append(
         f"- **연관성 크기**: Cramér's V {stats['cramers_v']:.3f} → **{strength_label(stats['cramers_v'])}** "
-        "(기준: 0.1 미만 매우 약함 · 0.1~0.3 약함 · 0.3~0.5 중간 · 0.5 이상 강함)"
+        "(기준: 0.1 미만 무시할 수준 · 0.1~0.3 약함 · 0.3~0.5 중간 · 0.5 이상 강함)"
     )
     ranked = summary.loc[summary["범주"].ne(small_label)]  # 소표본 묶음은 최고·최저 비교에서 제외
     ranked = ranked if len(ranked) else summary
@@ -570,18 +703,14 @@ def render():
     st.caption("공고 조건에 따라 유찰률이 어떻게 달라지는지 탐색합니다. 통계적 연관성과 인과관계는 구분합니다")
     ui.source_note()
 
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        factor = st.selectbox("분석 변수", FACTORS)
-    with c2:
-        years = st.slider(
-            "분석 기간 (공고일 기준)",
-            min_value=YEAR_MIN,
-            max_value=YEAR_MAX,
-            value=DEFAULT_YEARS,
-            step=1,
-            format="%d년",
-        )
+    years = st.slider(
+        "분석 기간 (공고일 기준)",
+        min_value=YEAR_MIN,
+        max_value=YEAR_MAX,
+        value=DEFAULT_YEARS,
+        step=1,
+        format="%d년",
+    )
     st.caption(md_safe(
         f"기본 기간 {DEFAULT_YEARS[0]}~{DEFAULT_YEARS[1]}년 = 위험도 변수를 고른 기준 기간입니다 "
         "(분석계획표 1~4·KPI 정의서와 같은 수치). "
@@ -599,17 +728,51 @@ def render():
         period_df = filter_period(base, years)
         # 팀 기준: 수의계약은 모든 분석에서 제외
         period_df, private_excluded = exclude_private_contracts(period_df)
+        try:
+            # 경계는 분석 기간과 상관없이 2021~2023년으로 고정 (화면 1·분석계획표 3과 같음).
+            # 기간마다 다시 나누면 같은 'Q1'이라도 금액대가 달라져 문서 수치와 연도 간 비교가 맞지 않는다
+            bins, names, q, basis, n_basis = amount_quintiles(period_df, base, AMOUNT_BASIS_YEARS)
+        except ValueError as e:
+            st.error(str(e))
+            return
+        period_df = period_df.assign(amount_bin=bins)
+        order = {**order, AMOUNT: names}
+        overview = factor_overview(period_df, order)
+
+    with st.container(border=True):
+        st.subheader("변수별 검정 요약")
+        st.caption(md_safe(
+            f"기간: {period} · 변수 {len(overview)}개를 한 번에 검정하고 Holm 보정 · "
+            "막대 = Cramér's V(연관성 크기), 색 = 보정 후 유의 여부(p < 0.05)"))
+        if overview.empty:
+            st.warning("선택한 기간에 검정할 수 있는 변수가 없습니다")
+        else:
+            st.plotly_chart(overview_chart(overview), use_container_width=True)
+            st.dataframe(
+                overview_view(overview),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "분석 건수": st.column_config.NumberColumn(format="%d"),
+                    "Cramér's V": st.column_config.NumberColumn(format="%.3f"),
+                    "유찰률 차이(%p)": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+            st.caption(md_safe(
+                "문서(분석계획표 1-4·프로젝트 정의서 5-2) 검정 기준: 계약방법은 2단계경쟁 동시·분리를 통합, "
+                "범주가 2개인 변수(사업유형)는 연속성 보정. 아래 변수별 상세도 같은 기준으로 검정합니다"))
+            st.caption(md_safe(
+                f"위험도 반영 = {DEFAULT_YEARS[0]}~{DEFAULT_YEARS[1]}년 검정으로 정한 팀 결정이라 기간을 바꿔도 그대로입니다. "
+                "공고 시기는 유의하지만 연관성이 무시할 수준이고 유찰률이 가장 높은 분기가 해마다 달라 제외했습니다"))
+            for note in small_extreme_notes(overview):
+                st.caption(md_safe(note))
+            st.info("표본이 커서 작은 차이도 유의하게 나올 수 있습니다. p값과 함께 Cramér's V를 보고 판단하세요")
+
+    st.subheader("변수별 상세")
+    factor = st.selectbox("분석 변수", FACTORS)
+    with st.spinner("유찰 요인 분석 결과를 불러오는 중입니다..."):
         amount_info = None
         if factor == AMOUNT:
-            try:
-                # 경계는 분석 기간과 상관없이 2021~2023년으로 고정 (화면 1·분석계획표 3과 같음).
-                # 기간마다 다시 나누면 같은 'Q1'이라도 금액대가 달라져 문서 수치와 연도 간 비교가 맞지 않는다
-                bins, names, q, basis, n_basis = amount_quintiles(period_df, base, AMOUNT_BASIS_YEARS)
-            except ValueError as e:
-                st.error(str(e))
-                return
-            period_df = period_df.assign(amount_bin=bins)
-            order = {**order, AMOUNT: names}
             amount_info = {
                 "q": q, "basis": basis, "n_basis": n_basis,
                 "src": period_df.loc[period_df["사업규모금액"].isna(), "금액출처"].value_counts(),
@@ -621,11 +784,18 @@ def render():
 
         table, summary = summarize(data, order.get(factor), small_label)
         overall_rate = data["fail"].mean() * 100
-        stats = chi_square_test(table) if len(table) >= 2 else None
+        # 검정은 요약표와 같은 문서 기준 교차표로 하고 p는 6개 Holm 보정값을 쓴다 (화면 숫자를 하나로 맞춤).
+        # 차트·교차표는 위 summary 그대로 범주를 나눠 보여 준다
+        stats = None
+        row = overview.loc[overview["변수"].eq(factor)]
+        if not row.empty:
+            stats = chi_square_test(test_table(period_df, factor, order)[1], correction=True)
+            stats["p_value"] = float(row["Holm 보정 p"].iloc[0])
 
     c1, c2, c3 = st.columns(3)
     c1.metric("분석 대상 공고 수", f"{len(data):,}건", help=f"전체 유찰률 {overall_rate:.2f}%")
-    c2.metric("카이제곱 p-value", format_p(stats["p_value"]) if stats else "—")
+    c2.metric("p-value (Holm 보정)", format_p_exact(stats["p_value"]) if stats else "—",
+              help="위 요약표와 같은 값. 변수 6개를 함께 검정해 Holm 보정")
     c3.metric(
         "Cramér's V",
         f"{stats['cramers_v']:.3f}" if stats else "—",
@@ -697,6 +867,8 @@ def render():
         else:
             st.markdown(md_safe(interpretation(factor, period, summary, stats, overall_rate, small_label)))
             st.caption(f"χ² = {stats['chi2']:,.2f}, 자유도 = {stats['dof']}, 최소 기대빈도 = {stats['min_expected']:.1f}")
+            if factor in SUMMARY_MERGE:
+                st.caption("검정은 문서 기준으로 2단계경쟁 동시·분리를 하나로 묶어 계산합니다 (차트·교차표는 나눠서 표시)")
             if stats["low_expected_ratio"] > 0:
                 st.warning(
                     f"기대빈도 5 미만인 칸이 {stats['low_expected_ratio']:.0%} 있어 "
