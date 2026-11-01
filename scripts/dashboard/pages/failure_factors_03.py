@@ -52,9 +52,9 @@ ALPHA = 0.05
 
 # 변수별 요약표는 문서(분석계획표 1-4·정의서 5-2) 검정 기준을 따른다:
 # 계약방법은 2단계경쟁 동시·분리를 통합, 2×2 교차표는 연속성 보정, 6개 검정을 한 묶음으로 Holm 보정
-SUMMARY_MERGE = {"계약·경쟁방식": {"2단계경쟁(동시)": "2단계경쟁", "2단계경쟁(분리)": "2단계경쟁"}}
+SUMMARY_MERGE = {"계약방법": {"2단계경쟁(동시)": "2단계경쟁", "2단계경쟁(분리)": "2단계경쟁"}}
 RISK_DECISION = {  # 2021~2023년 기준 기간 검정으로 정한 팀 결정 (기간을 바꿔도 그대로)
-    "기관그룹": "채택", "사업유형": "채택", "계약·경쟁방식": "채택", AMOUNT: "채택",
+    "기관그룹": "채택", "사업유형": "채택", "계약방법": "채택", AMOUNT: "채택",
     "공고기간": "제외", "공고 시기": "제외",
 }
 
@@ -430,11 +430,22 @@ SUPERSCRIPT = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
 def format_p_exact(p):
-    """요약표용 p값: 0.001 미만은 문서처럼 3.32×10⁻⁵⁷ 형식."""
+    """요약표용 p값: 문서처럼 0.0094 / 0.000954 / 3.32×10⁻⁵⁷ 형식."""
     if p >= 0.001:
         return f"{p:.4f}"
+    if p >= 0.0001:
+        return f"{p:.6f}"
     mantissa, exponent = f"{p:.2e}".split("e")
     return f"{mantissa}×10{str(int(exponent)).translate(SUPERSCRIPT)}"
+
+
+def doc_round(p):
+    """format_p_exact로 표시되는 자릿수까지 반올림한 값."""
+    if p >= 0.001:
+        return round(p, 4)
+    if p >= 0.0001:
+        return round(p, 6)
+    return float(f"{p:.2e}")
 
 
 def holm(p_values):
@@ -481,7 +492,8 @@ def factor_overview(df, order):
     overview = pd.DataFrame(rows)
     if overview.empty:
         return overview
-    overview["Holm 보정 p"] = holm(overview["p"].tolist())
+    # 문서(분석계획표 1-4·PPT 4-4)는 표에 적은 원 p값(0.0047, 0.000318 등)에 Holm을 적용했으므로 같은 자릿수로 맞춘다
+    overview["Holm 보정 p"] = holm([doc_round(p) for p in overview["p"]])
     overview["판정"] = np.where(overview["Holm 보정 p"] < ALPHA, "유의", "유의하지 않음")
     overview["연관성 크기"] = overview["Cramér's V"].map(strength_label)
     overview["위험도 반영"] = overview["변수"].map(RISK_DECISION)
