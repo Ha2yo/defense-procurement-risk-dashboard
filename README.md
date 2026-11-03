@@ -1,37 +1,58 @@
-# 군수품 조달 유찰 위험 예측 대시보드 구축을 통한 조달 효율성 향상
+# 🛡️ 군수품 조달 유찰 위험 예측 대시보드
 
-방위사업청 군수품 조달 공공데이터(조달계획·입찰공고·입찰결과·품목명세서, 2021~2025)를 이용해
-신규 입찰공고의 유찰 위험을 사전에 식별하고, 과거 유사 공고를 빠르게 검토할 수 있는 Streamlit 대시보드를 만든다.
+<!-- 대표 이미지: docs/images/ 에 캡처를 넣은 뒤 아래 주석을 해제
+<p align="center"><img src="docs/images/risk_prediction.png" width="90%"></p>
+-->
 
-**현재 프로젝트 범위:** 조달계획·입찰공고·입찰결과·품목명세서를 사용한다. **계약정보(`contract_info`)는 현행 분석·KPI 산정·대시보드 입력에서 제외**하며, 기존 계약 연계 코드는 `archive/contract/`에 보관한다. 계약정보 수집과 요구연도 복원은 현재 실행 순서에 포함되지 않는다.
+## 📝 프로젝트 소개
 
-> **구분:** 입찰공고의 `계약방법(cntrctMth)`은 유찰 분석에 계속 사용하는 변수이며, 별도 데이터셋인 `계약정보(contract_info)`와 다르다.
+- 방위사업청 군수품 조달 공공데이터로 **신규 입찰공고의 유찰 위험을 공고 전에 확인**하는 Streamlit 대시보드입니다.
+- 위험도는 **기관그룹 × 계약방법 × 사업유형 × 사업규모금액 5분위**가 같은 과거 공고의 유찰률입니다. 같은 조건의 공고가 10건 미만이면 조건을 하나씩 줄여 계산합니다.
+- 위험도와 함께 산정 근거와 과거 유사공고를 보여 줘, 담당자가 결과를 직접 확인할 수 있습니다.
 
-기준 문서: 프로젝트 정의서 · 데이터 항목정의서 · KPI 정의서 · 분석 계획표 · 잠재원인 우선순위표 · 연도별 결과 미확인 분포표
-
----
-
-## 시작 방법
-
-```bash
-# 1) 패키지 설치
-pip install -r requirements.txt
-
-# 2) 대시보드 실행 (프로젝트 루트에서)
-streamlit run app.py
-```
-
-데이터를 새로 수집할 때만 프로젝트 루트에 `.env` 파일이 필요하다
-
-```
-API_KEY_DATA_PORTAL=...
-```
-
-현재 실행 대상 스크립트는 **프로젝트 루트에서** `python scripts/...` 형태로 실행한다. `archive/`의 코드는 기본 실행 대상이 아니다
+<p align="center"><a href="https://defense-procurement-risk.streamlit.app/"><img src="https://img.shields.io/badge/🚀_대시보드_바로가기-FF4B4B?style=for-the-badge"></a>
+<a href="https://drive.google.com/file/d/1QegxA6lLpeckYm1Xr1H8lE8EkgLv5mJu/view?usp=sharing"><img src="https://img.shields.io/badge/🎬_시연_영상-555555?style=for-the-badge"></a></p>
 
 ---
 
-## 폴더 구조
+## 📊 주요 결과
+
+| 지표 | 결과 |
+|---|---|
+| 전체 유찰률 | 18.39% (6,269 / 34,097건) |
+| KPI 1 · 위험도 상위 20% 사전 식별률 | 2024년 34.99% · 2025년 35.53% |
+| KPI 3 · 공고 1건 과거 이력 확인 시간 | 3분 6초 → 37.66초 |
+| 유찰 후 재공고까지 추가 소요일 | 평균 15.39일 (중앙값 12일, 2,090건) |
+
+---
+
+## ⏳ 데이터
+
+- **출처:** 방위사업청 군수품 조달 공공데이터 (OPEN API)
+- **범위:** 조달계획 · 입찰공고 · 입찰결과 · 품목명세서, 2021~2025년
+- `data/raw/`, `data/clean/`은 커밋하지 않습니다. 대시보드는 `data/dashboard/`의 parquet만으로 실행됩니다.
+- 데이터를 새로 수집할 때만 프로젝트 루트에 `.env` 파일이 필요합니다.
+  ```
+  API_KEY_DATA_PORTAL=...
+  ```
+---
+
+## 🗂️ 프로젝트 구조
+
+- [`app.py`](app.py) — 대시보드 진입점
+- [`scripts/collection/`](scripts/collection) — ① 데이터 수집 (OPEN API)
+- [`scripts/preprocessing/`](scripts/preprocessing) — ② 정제 및 공고-결과 병합
+- [`scripts/ornt/`](scripts/ornt) — ③ 기관그룹 분류
+- [`scripts/analysis/`](scripts/analysis) — ④ 분석 계획표 1~5번 (파일명 앞 번호 = 분석 번호)
+- [`scripts/kpi/`](scripts/kpi) — ⑤ 공식 4변수 위험도 · KPI 검증
+- [`scripts/dashboard/`](scripts/dashboard) — ⑥ 대시보드 화면
+- [`data/dashboard/`](data/dashboard) — 대시보드 입력 parquet
+- [`data/analysis/`](data/analysis) · [`data/kpi/`](data/kpi) — 분석 · KPI 산출물
+- [`docs/`](docs) — 분석별 실행 가이드
+- [`archive/`](archive) — 이전 기준 코드 (보관용, 기본 실행 제외)
+
+<details>
+<summary>폴더 트리 펼치기</summary>
 
 ```
 ├─ app.py                    대시보드 진입점
@@ -53,9 +74,57 @@ API_KEY_DATA_PORTAL=...
    └─ contract/              계약정보 수집·요구연도 복원 코드 (현행 분석 범위 밖)
 ```
 
+</details>
+
 ---
 
-## 실행 순서
+## 🛠️ 설치 및 실행
+
+1. 레포지토리 복제
+   ```bash
+   git clone https://github.com/Ha2yo/defense-procurement-risk-dashboard.git
+   cd defense-procurement-risk-dashboard
+   ```
+2. 패키지 설치
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. 대시보드 실행 (프로젝트 루트에서)
+   ```bash
+   streamlit run app.py
+   ```
+
+분석 스크립트는 **프로젝트 루트에서** `python scripts/...` 형태로 실행합니다. 전체 순서는 아래 [📚 상세 문서](#-상세-문서)를 참고하세요.
+
+---
+
+## 👨🏻‍💻 대시보드 사용법
+
+| 페이지 | 내용 |
+|---|---|
+| 1. 전체 유찰 현황 | 핵심 지표, 연도별 유찰률 추이, 기관그룹·계약방법·사업유형·금액별 공고·유찰 분포 |
+| 2. 공고별 위험도·유사사례 | 2025년 공고 선택 또는 조건 직접 입력 → 위험 등급(1~10), 산정 근거, 과거 유사공고 |
+| 3. 유찰 요인 분석 | 6개 변수 검정 요약, 변수별 범주 유찰률과 교차표 |
+| 4. 유찰 후 지연 영향 | 후속공고 현황, 재공고까지 추가 소요일 분포 |
+
+<!-- 페이지별 캡처: docs/images/ 에 넣은 뒤 주석 해제
+<img src="docs/images/overview.png" width="49%"> <img src="docs/images/risk_prediction.png" width="49%">
+<img src="docs/images/failure_factors.png" width="49%"> <img src="docs/images/delay_effect.png" width="49%">
+-->
+
+---
+
+## 🌐 배포
+
+- 대시보드: [https://defense-procurement-risk.streamlit.app/](https://defense-procurement-risk.streamlit.app/) (Streamlit Community Cloud)
+- 시연 영상: [https://drive.google.com/file/d/1QegxA6lLpeckYm1Xr1H8lE8EkgLv5mJu/view?usp=sharing](https://drive.google.com/file/d/1QegxA6lLpeckYm1Xr1H8lE8EkgLv5mJu/view?usp=sharing)
+
+---
+
+## 📚 상세 문서
+
+<details>
+<summary><b>실행 순서 ①~⑥ 펼치기</b></summary>
 
 프로젝트 루트에서 `python scripts/<폴더>/<파일>` 형태로 현재 사용 중인 파일을 표의 위에서부터 순서대로 실행한다. 결과 경로는 `data/` 아래 기준이며, **계약정보 수집·정제·복원 단계는 이 실행 순서에 포함되지 않는다.**
 
@@ -106,9 +175,11 @@ API_KEY_DATA_PORTAL=...
 
 **계약정보 사용 범위:** 현재 KPI와 대시보드 화면 1~4에서는 `contract_info` 데이터셋을 사용하지 않는다. `data/dashboard/contract_info.parquet`가 남아 있더라도 **현행 입력 데이터로 취급하지 않는다.** 기존 계약정보 RAW·CLEAN 및 `data/analysis/contract_year_independent/`의 과거 산출물은 이번 README 정리만으로 삭제하거나 변경하지 않는다. 불필요한 파일 제거 여부는 참조 코드·Git 추적 상태를 검증한 뒤 별도 작업으로 결정한다.
 
----
+</details>
 
-## 분석 기준 요약
+<details>
+<summary><b>분석 기준 요약 펼치기</b></summary>
+
 - **분석 단위**: 공고키(`demandYear + orntCode + dcsNo + pblancNo + pblancOdr`) 기준 공고 1건
 - **결과 변수**: 유찰 = 1, 낙찰·순위확정 = 0. 결과 미확인·판단보류·수의계약은 제외
 - **데이터 범위**: 계약정보(`contract_info`) 미사용. 입찰공고의 계약방법(`cntrctMth`)은 분석 변수로 유지
@@ -116,9 +187,11 @@ API_KEY_DATA_PORTAL=...
 - **기초금액(`bsicExpt`)은 위험도에 사용하지 않음** (단가제 공고에 단가 입력 혼입) → 조달계획 예산·품목 총액으로 산정한 사업규모금액 사용
 - 상세 정의는 데이터 항목정의서·KPI 정의서를 따른다.
 
----
+</details>
 
-## archive/ (보관용)
+<details>
+<summary><b>archive/ (보관용) 펼치기</b></summary>
+
 아래 파일·폴더는 **현재 수집→전처리→분석→KPI→대시보드 실행 경로에 포함되지 않는다.** 별도 과거 연구를 재현할 때는 코드와 입력 경로를 다시 확인한다.
 
 | 경로 | 내용 |
@@ -130,8 +203,11 @@ API_KEY_DATA_PORTAL=...
 | `archive/notebooks/` | 초기 위험도 분석 설명 노트북 |
 | `archive/amount_validation/` | 03번과 같은 수치를 내는 이전 금액 검증 코드. 03번에 없는 입찰방법 교차검증표(06) 확인용 |
 
+</details>
+
 ---
 
-## 협업 규칙
+## 🤝 협업 규칙
+
 - git 사용 설명서: https://app.notion.com/p/3f1830b2d9f78025875de5f35e33ee2d
 - main에는 PR로만 합친다. 커밋 전 `git status`로 의도하지 않은 파일이 없는지 확인한다.
